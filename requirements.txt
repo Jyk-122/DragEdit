@@ -1,0 +1,6 @@
+numpy
+opencv-python
+Pillow
+numba
+torch
+# Optional SAM backend: pip install git+https://github.com/facebookresearch/segment-anything.git

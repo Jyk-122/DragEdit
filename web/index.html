@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DragEdit Preview</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside class="panel">
+    <header>
+      <div class="eyebrow">DRAG-BASED IMAGE EDITING</div>
+      <h1>DragEdit Preview</h1>
+      <p>浏览器负责鼠标交互，Python 负责非刚性变形和 Mask 计算。</p>
+    </header>
+
+    <section>
+      <h2>1. 图像</h2>
+      <label class="file-button">
+        选择图像
+        <input id="imageInput" type="file" accept="image/*">
+      </label>
+      <label class="number-row">
+        <span>预览长边</span>
+        <input id="previewLongEdge" type="number" min="320" max="4096" step="1" value="1080" list="resolutionPresets">
+        <span>px</span>
+      </label>
+      <datalist id="resolutionPresets">
+        <option value="640"></option>
+        <option value="1080"></option>
+        <option value="2160"></option>
+      </datalist>
+    </section>
+
+    <section>
+      <h2>2. Mask 来源</h2>
+      <div class="button-grid mask-tools">
+        <button data-mode="paint" class="mode-button">手动画笔</button>
+        <button data-mode="erase" class="mode-button">橡皮</button>
+        <button data-mode="sam" class="mode-button" disabled>SAM 点选对象</button>
+      </div>
+      <label class="range-row">
+        <span>画笔大小</span>
+        <input id="brushSize" type="range" min="4" max="100" value="32">
+      </label>
+      <div class="inline-buttons">
+        <button id="clearMask">清空 Mask</button>
+      </div>
+      <p id="samHint" class="section-hint">配置 SAM 后，加载图像会先完成特征提取；随后点击对象即可生成其 Mask。</p>
+    </section>
+
+    <section>
+      <h2>3. 编辑方式</h2>
+      <label class="select-row">
+        <span>Warp 算法</span>
+        <select id="warpAlgorithm">
+          <option value="baseline">Baseline Warp（bi_warp）</option>
+          <option value="my_warp">My Warp（实验版本）</option>
+        </select>
+      </label>
+      <div class="edit-tabs">
+        <button data-mode="transform" class="mode-button">二维整体变换</button>
+        <button data-mode="deform" class="mode-button">二维非刚形变</button>
+      </div>
+      <label id="boundaryAnchorRow" class="check-row" hidden>
+        <input id="boundaryAnchors" type="checkbox" checked>
+        <span>自动固定远端边界</span>
+      </label>
+      <label class="range-row">
+        <span>Warp 图层透明度</span>
+        <input id="warpOpacity" type="range" min="20" max="100" value="72">
+        <output id="warpOpacityValue">72%</output>
+      </label>
+      <div class="inline-buttons">
+        <button id="deletePair">删除选中点对</button>
+        <button id="resetEdit">重置编辑</button>
+      </div>
+    </section>
+
+    <section class="tips">
+      <h2>当前操作</h2>
+      <p id="instructions">请先加载图像。</p>
+    </section>
+  </aside>
+
+  <main>
+    <div id="emptyState">
+      <strong>选择一张图像开始</strong>
+      <span>图像会按照设置的长边分辨率等比例缩放。</span>
+    </div>
+    <div id="stage" hidden>
+      <canvas id="previewCanvas"></canvas>
+      <canvas id="overlayCanvas"></canvas>
+    </div>
+    <footer>
+      <span id="status">等待图像</span>
+      <span id="performance"></span>
+    </footer>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
