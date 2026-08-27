@@ -73,13 +73,16 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 for pair in request["point_pairs"]
             ]
             algorithm = request.get("algorithm", "baseline")
+            kernel_size = int(request.get("inpaint_kernel_size", 5))
             session = WARP_SESSIONS[algorithm]
             started = time.perf_counter()
             if algorithm == "baseline":
-                preview, inpaint_mask, target_mask = session.preview(point_pairs)
+                preview, inpaint_mask, target_mask = session.preview(
+                    point_pairs, kernel_size
+                )
             else:
                 preview, inpaint_mask, _, target_mask = session.preview(
-                    point_pairs, request["keep_boundary"]
+                    point_pairs, request["keep_boundary"], kernel_size
                 )
             LAST_SESSION = session
             preview = compose_ghost_preview(
@@ -95,6 +98,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 "X-Inpaint-Pixels": str(int(inpaint_mask.sum())),
                 "X-Target-Mask-Pixels": str(int(target_mask.sum())),
                 "X-Warp-Algorithm": algorithm,
+                "X-Inpaint-Kernel-Size": str(kernel_size),
             }
             self.send_bytes(encoded.tobytes(), "image/jpeg", headers)
             return

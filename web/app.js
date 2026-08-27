@@ -16,21 +16,28 @@ const keepBoundary = document.querySelector("#boundaryAnchors");
 const warpAlgorithm = document.querySelector("#warpAlgorithm");
 const warpOpacity = document.querySelector("#warpOpacity");
 const warpOpacityValue = document.querySelector("#warpOpacityValue");
+const inpaintKernelSize = document.querySelector("#inpaintKernelSize");
+const inpaintKernelSizeValue = document.querySelector("#inpaintKernelSizeValue");
 const boundaryAnchorRow = document.querySelector("#boundaryAnchorRow");
 const samButton = document.querySelector('[data-mode="sam"]');
 const samHint = document.querySelector("#samHint");
+const MASK_OPACITY = 0.36;
+const MASK_MODES = new Set(["paint", "erase", "sam"]);
 
 let width = 0;
 let height = 0;
 let original = null;
 let mask = null;
 let maskBounds = null;
-let baseImage = null;
 let objectCanvas = null;
+let transformCanvas = null;
+let transformMaskCanvas = null;
+let transformMaskBuffers = null;
 let maskOverlayCanvas = null;
 let maskCanvas = null;
 let sourceCanvas = null;
 let mode = "paint";
+let editMode = null;
 let renderRequested = false;
 let pythonReady = Promise.resolve();
 let pendingWarp = null;
@@ -59,7 +66,11 @@ const instructionText = {
 
 
 function setMode(nextMode) {
-  warpEpoch++;
+  const editModeChanged = !MASK_MODES.has(nextMode) && editMode !== nextMode;
+  if (editModeChanged) {
+    editMode = nextMode;
+    warpEpoch++;
+  }
   mode = nextMode;
   document.querySelectorAll(".mode-button").forEach(button => {
     button.classList.toggle("active", button.dataset.mode === mode);
@@ -67,7 +78,8 @@ function setMode(nextMode) {
   instructions.textContent = original ? instructionText[mode] : "请先加载图像。";
   pendingSource = null;
   hoverPoint = null;
-  schedulePreview();
+  if (editModeChanged || nextMode === "transform") schedulePreview();
+  else drawOverlay();
 }
 
 
@@ -128,8 +140,19 @@ async function loadImage(file) {
   sourceCanvas.width = width;
   sourceCanvas.height = height;
   sourceCanvas.getContext("2d").putImageData(original, 0, 0);
+  transformCanvas = document.createElement("canvas");
+  transformCanvas.width = width;
+  transformCanvas.height = height;
+  transformMaskCanvas = document.createElement("canvas");
+  transformMaskCanvas.width = width;
+  transformMaskCanvas.height = height;
+  transformMaskBuffers = {};
+  for (const name of ["target", "revealed", "boundary", "hole", "band", "inpaint", "scratch"]) {
+    transformMaskBuffers[name] = new Uint8Array(width * height);
+  }
   mask = new Uint8Array(width * height);
   pointPairs = [];
+  editMode = null;
   transform = {x: 0, y: 0, angle: 0, scale: 1};
   updateMaskAssets(false);
   emptyState.hidden = true;
@@ -230,8 +253,95 @@ function paintLine(from, to, value) {
 }
 
 
+function dilateMask(source, kernelSize, result = null, horizontal = null) {
+  const radius = Math.floor(kernelSize / 2);
+  result ??= new Uint8Array(source.length);
+  if (radius === 0) {
+    result.set(source);
+    return result;
+  }
+  horizontal ??= new Uint8Array(source.length);
+
+  for (let y = 0; y < height; y++) {
+    const row = y * width;
+    let count = 0;
+    for (let x = 0; x <= Math.min(radius, width - 1); x++) count += source[row + x];
+    for (let x = 0; x < width; x++) {
+      horizontal[row + x] = count > 0 ? 1 : 0;
+      const remove = x - radius;
+      const add = x + radius + 1;
+      if (remove >= 0) count -= source[row + remove];
+      if (add < width) count += source[row + add];
+    }
+  }
+
+  for (let x = 0; x < width; x++) {
+    let count = 0;
+    for (let y = 0; y <= Math.min(radius, height - 1); y++) count += horizontal[y * width + x];
+    for (let y = 0; y < height; y++) {
+      result[y * width + x] = count > 0 ? 1 : 0;
+      const remove = y - radius;
+      const add = y + radius + 1;
+      if (remove >= 0) count -= horizontal[remove * width + x];
+      if (add < height) count += horizontal[add * width + x];
+    }
+  }
+  return result;
+}
+
+
+function drawTransformedAsset(context, asset) {
+  const pivot = originalPivot();
+  context.save();
+  context.imageSmoothingEnabled = true;
+  context.translate(pivot.x + transform.x, pivot.y + transform.y);
+  context.rotate(transform.angle);
+  context.scale(transform.scale, transform.scale);
+  context.translate(-pivot.x, -pivot.y);
+  context.drawImage(asset, 0, 0);
+  context.restore();
+}
+
+
+function buildTransformInpaintMask() {
+  const targetContext = transformMaskCanvas.getContext("2d");
+  targetContext.setTransform(1, 0, 0, 1, 0, 0);
+  targetContext.clearRect(0, 0, width, height);
+  drawTransformedAsset(targetContext, maskOverlayCanvas);
+  const targetPixels = targetContext.getImageData(0, 0, width, height).data;
+  const buffers = transformMaskBuffers;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const pixel = y * width + x;
+      const target = targetPixels[pixel * 4 + 3] >= 128 ? 1 : 0;
+      buffers.target[pixel] = target;
+      buffers.revealed[pixel] = mask[pixel] && !target ? 1 : 0;
+    }
+  }
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const pixel = y * width + x;
+      buffers.boundary[pixel] = buffers.target[pixel] && (
+        x === 0 || y === 0 || x === width - 1 || y === height - 1 ||
+        !buffers.target[pixel - 1] || !buffers.target[pixel + 1] ||
+        !buffers.target[pixel - width] || !buffers.target[pixel + width]
+      ) ? 1 : 0;
+    }
+  }
+
+  const kernelSize = Number(inpaintKernelSize.value);
+  dilateMask(buffers.revealed, kernelSize, buffers.hole, buffers.scratch);
+  dilateMask(buffers.boundary, kernelSize, buffers.band, buffers.scratch);
+  for (let pixel = 0; pixel < buffers.inpaint.length; pixel++) {
+    buffers.inpaint[pixel] = buffers.hole[pixel] || buffers.band[pixel] ? 1 : 0;
+  }
+  return buffers.inpaint;
+}
+
+
 function updateMaskAssets(sync = true) {
-  const basePixels = new Uint8ClampedArray(original.data);
   const objectPixels = new Uint8ClampedArray(original.data);
   const overlayPixels = new Uint8ClampedArray(width * height * 4);
   const maskPixels = new Uint8ClampedArray(width * height * 4);
@@ -247,14 +357,10 @@ function updateMaskAssets(sync = true) {
         right = Math.max(right, x);
         top = Math.min(top, y);
         bottom = Math.max(bottom, y);
-        const checker = ((Math.floor(x / 10) + Math.floor(y / 10)) & 1) ? 202 : 235;
-        basePixels[index] = checker;
-        basePixels[index + 1] = checker;
-        basePixels[index + 2] = checker;
         overlayPixels[index] = 255;
         overlayPixels[index + 1] = 62;
         overlayPixels[index + 2] = 92;
-        overlayPixels[index + 3] = 92;
+        overlayPixels[index + 3] = 255;
         maskPixels[index] = 255;
         maskPixels[index + 1] = 255;
         maskPixels[index + 2] = 255;
@@ -265,7 +371,6 @@ function updateMaskAssets(sync = true) {
   }
 
   maskBounds = right >= left ? {left, right, top, bottom} : null;
-  baseImage = new ImageData(basePixels, width, height);
   objectCanvas = document.createElement("canvas");
   objectCanvas.width = width;
   objectCanvas.height = height;
@@ -289,8 +394,8 @@ function drawMaskStroke(from, to, value) {
   const diameter = Number(brushSize.value) * displayScale();
   context.save();
   context.globalCompositeOperation = value ? "source-over" : "destination-out";
-  context.strokeStyle = "rgba(255, 62, 92, .36)";
-  context.fillStyle = "rgba(255, 62, 92, .36)";
+  context.strokeStyle = "rgb(255, 62, 92)";
+  context.fillStyle = "rgb(255, 62, 92)";
   context.lineWidth = diameter;
   context.lineCap = "round";
   context.beginPath();
@@ -314,9 +419,17 @@ function schedulePreview() {
 
 function renderPreview() {
   renderRequested = false;
+  if (MASK_MODES.has(mode)) {
+    drawOverlay();
+    return;
+  }
   if (maskBounds && mode === "deform" && pointPairs.length > 0) {
     requestPythonPreview();
     drawOverlay();
+    return;
+  }
+  if (mode === "transform") {
+    renderTransformPreview();
     return;
   }
 
@@ -324,21 +437,49 @@ function renderPreview() {
   preview.setTransform(1, 0, 0, 1, 0, 0);
   preview.clearRect(0, 0, width, height);
 
-  if (!maskBounds || ["paint", "erase", "sam"].includes(mode)) {
-    preview.putImageData(original, 0, 0);
-  } else if (mode === "transform") {
-    preview.putImageData(baseImage, 0, 0);
-    const pivot = originalPivot();
-    preview.save();
-    preview.imageSmoothingEnabled = true;
-    preview.translate(pivot.x + transform.x, pivot.y + transform.y);
-    preview.rotate(transform.angle);
-    preview.scale(transform.scale, transform.scale);
-    preview.translate(-pivot.x, -pivot.y);
-    preview.drawImage(objectCanvas, 0, 0);
-    preview.restore();
-  } else preview.putImageData(original, 0, 0);
+  preview.putImageData(original, 0, 0);
+  drawOverlay();
+  performanceText.textContent = `预览 ${(performance.now() - started).toFixed(1)} ms`;
+}
 
+
+function renderTransformPreview() {
+  if (!original) return;
+  const started = performance.now();
+  const transformed = transformCanvas.getContext("2d");
+  transformed.setTransform(1, 0, 0, 1, 0, 0);
+  transformed.clearRect(0, 0, width, height);
+  const transformedState = Math.abs(transform.x) > 1e-4 || Math.abs(transform.y) > 1e-4 ||
+    Math.abs(transform.angle) > 1e-4 || Math.abs(transform.scale - 1) > 1e-4;
+  transformed.putImageData(original, 0, 0);
+
+  if (maskBounds) {
+    drawTransformedAsset(transformed, objectCanvas);
+  }
+
+  if (maskBounds && transformedState) {
+    const inpaintMask = buildTransformInpaintMask();
+    const transformedImage = transformed.getImageData(0, 0, width, height);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const pixel = y * width + x;
+        if (!inpaintMask[pixel]) continue;
+        const index = pixel * 4;
+        const grid = ((Math.floor(x / 10) + Math.floor(y / 10)) & 1) ? 200 : 240;
+        transformedImage.data[index] = grid;
+        transformedImage.data[index + 1] = grid;
+        transformedImage.data[index + 2] = grid;
+      }
+    }
+    transformed.putImageData(transformedImage, 0, 0);
+  }
+
+  preview.setTransform(1, 0, 0, 1, 0, 0);
+  preview.putImageData(original, 0, 0);
+  preview.save();
+  preview.globalAlpha = Number(warpOpacity.value) / 100;
+  preview.drawImage(transformCanvas, 0, 0);
+  preview.restore();
   drawOverlay();
   performanceText.textContent = `预览 ${(performance.now() - started).toFixed(1)} ms`;
 }
@@ -354,6 +495,7 @@ function requestPythonPreview() {
     keep_boundary: keepBoundary.checked,
     algorithm: warpAlgorithm.value,
     preview_opacity: Number(warpOpacity.value) / 100,
+    inpaint_kernel_size: Number(inpaintKernelSize.value),
   };
   runWarpQueue();
 }
@@ -372,7 +514,7 @@ async function runWarpQueue() {
     body: JSON.stringify(request),
   });
   const bitmap = await createImageBitmap(await response.blob());
-  if (request.epoch === warpEpoch && mode === "deform" && pointPairs.length > 0) {
+  if (request.epoch === warpEpoch && editMode === "deform" && pointPairs.length > 0) {
     preview.setTransform(1, 0, 0, 1, 0, 0);
     preview.drawImage(bitmap, 0, 0, width, height);
     drawOverlay();
@@ -453,8 +595,8 @@ function drawOverlay() {
   if (!original) return;
   const scale = displayScale();
 
-  if (["paint", "erase", "sam"].includes(mode)) {
-    overlay.drawImage(maskOverlayCanvas, 0, 0);
+  if (MASK_MODES.has(mode)) {
+    drawMaskGuide();
     if ((mode === "paint" || mode === "erase") && hoverPoint) {
       overlay.beginPath();
       overlay.arc(hoverPoint.x, hoverPoint.y, Number(brushSize.value) * scale / 2, 0, Math.PI * 2);
@@ -470,20 +612,24 @@ function drawOverlay() {
     drawGizmo(scale);
   }
   if (mode === "deform") {
-    overlay.drawImage(maskOverlayCanvas, 0, 0);
+    drawMaskGuide();
     drawPointPairs(scale);
   }
 }
 
 
-function drawTransformedMask() {
-  const pivot = originalPivot();
+function drawMaskGuide() {
   overlay.save();
-  overlay.translate(pivot.x + transform.x, pivot.y + transform.y);
-  overlay.rotate(transform.angle);
-  overlay.scale(transform.scale, transform.scale);
-  overlay.translate(-pivot.x, -pivot.y);
+  overlay.globalAlpha = MASK_OPACITY;
   overlay.drawImage(maskOverlayCanvas, 0, 0);
+  overlay.restore();
+}
+
+
+function drawTransformedMask() {
+  overlay.save();
+  overlay.globalAlpha = MASK_OPACITY;
+  drawTransformedAsset(overlay, maskOverlayCanvas);
   overlay.restore();
 }
 
@@ -534,10 +680,10 @@ function drawPointPairs(scale) {
 
 function drawPoint(point, color, selected, scale) {
   overlay.beginPath();
-  overlay.arc(point.x, point.y, (selected ? 7 : 6) * scale, 0, Math.PI * 2);
+  overlay.arc(point.x, point.y, (selected ? 5 : 4) * scale, 0, Math.PI * 2);
   overlay.fillStyle = color;
   overlay.fill();
-  overlay.lineWidth = 2 * scale;
+  overlay.lineWidth = 1.5 * scale;
   overlay.strokeStyle = "white";
   overlay.stroke();
 }
@@ -748,7 +894,13 @@ brushSize.addEventListener("input", drawOverlay);
 keepBoundary.addEventListener("change", schedulePreview);
 warpOpacity.addEventListener("input", () => {
   warpOpacityValue.textContent = `${warpOpacity.value}%`;
-  schedulePreview();
+  if (editMode === "transform") renderTransformPreview();
+  else schedulePreview();
+});
+inpaintKernelSize.addEventListener("input", () => {
+  inpaintKernelSizeValue.textContent = `${inpaintKernelSize.value} px`;
+  if (editMode === "transform") renderTransformPreview();
+  else if (mode === "deform") schedulePreview();
 });
 warpAlgorithm.addEventListener("change", () => {
   boundaryAnchorRow.hidden = warpAlgorithm.value === "baseline";
@@ -774,4 +926,6 @@ document.querySelector("#resetEdit").addEventListener("click", () => {
 });
 
 
+warpOpacityValue.textContent = `${warpOpacity.value}%`;
+inpaintKernelSizeValue.textContent = `${inpaintKernelSize.value} px`;
 setMode("paint");

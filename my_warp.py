@@ -5,7 +5,7 @@ OPTIMIZATION 2: add automatic zero-displacement boundary anchors.
 OPTIMIZATION 3: use fixed-point inversion to construct the backward map.
 OPTIMIZATION 4: derive the target mask from the inverse-warped source mask.
 OPTIMIZATION 5: use floating-point maps and bilinear image sampling.
-OPTIMIZATION 6: cache the checker pattern and source-hole preview image.
+OPTIMIZATION 6: cache the hole placeholder and source-hole preview image.
 
 The matching inline comments identify the exact implementation locations so
 each change can be evaluated independently against baseline_warp.
@@ -165,10 +165,11 @@ def build_inpaint_mask(source_mask, target_mask, kernel_size=5):
     return np.maximum(revealed, boundary)
 
 
-def checkerboard(image, size=10):
+def hole_placeholder(image, size=10):
+    """Create a Photoshop-style gray-white transparency grid."""
     y, x = np.indices(image.shape[:2])
-    values = np.where(((x // size + y // size) & 1) == 0, 235, 202).astype(np.uint8)
-    return np.repeat(values[..., None], 3, axis=2)
+    value = np.where(((x // size + y // size) & 1) == 0, 240, 200).astype(np.uint8)
+    return np.repeat(value[..., None], 3, axis=2)
 
 
 def warp_preview(
@@ -195,7 +196,7 @@ def warp_preview(
     warped = cv2.remap(image, source_x, source_y, cv2.INTER_LINEAR)
     alpha = cv2.remap(mask.astype(np.float32), source_x, source_y, cv2.INTER_LINEAR)
 
-    pattern = checkerboard(image) if pattern is None else pattern
+    pattern = hole_placeholder(image) if pattern is None else pattern
     base = np.where(mask[..., None] > 0, pattern, image) if base is None else base
     target_mask = alpha >= 0.5
     preview = base.copy()
@@ -221,16 +222,16 @@ class MyWarpSession:
         self.image = image
         self.mask = np.zeros(image.shape[:2], np.uint8)
         # OPTIMIZATION 6: cache preview-only arrays outside the drag loop.
-        self.pattern = checkerboard(image)
+        self.pattern = hole_placeholder(image)
         self.base = image.copy()
 
     def set_mask(self, mask):
         self.mask = (mask > 0).astype(np.uint8)
         self.base = np.where(self.mask[..., None] > 0, self.pattern, self.image)
 
-    def preview(self, point_pairs, keep_boundary=True):
+    def preview(self, point_pairs, keep_boundary=True, kernel_size=5):
         preview, self.inpaint_mask, displacement, self.target_mask = warp_preview(
-            self.image, self.mask, point_pairs, keep_boundary,
+            self.image, self.mask, point_pairs, keep_boundary, kernel_size,
             pattern=self.pattern, base=self.base
         )
         return preview, self.inpaint_mask, displacement, self.target_mask

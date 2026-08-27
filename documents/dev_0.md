@@ -136,6 +136,7 @@
 - `point_pairs`：source/target 点对。
 - `keep_boundary`：只对 My Warp 有意义。
 - `preview_opacity`：Ghost Warp 图层透明度。
+- `inpaint_kernel_size`：空洞膨胀与目标轮廓融合带使用的奇数核尺寸。
 
 返回 JPEG 预览，并通过响应头返回：
 
@@ -143,6 +144,7 @@
 - `X-Inpaint-Pixels`
 - `X-Target-Mask-Pixels`
 - `X-Warp-Algorithm`
+- `X-Inpaint-Kernel-Size`
 
 #### `POST /api/sam-mask`
 
@@ -169,7 +171,7 @@
 
 Baseline wrapper 使用返回的 source/target 索引把原图像素复制到目标位置。
 
-### 5.2 Inpaint Mask 与网格
+### 5.2 Inpaint Mask 与空洞占位
 
 `bi_warp` 计算的生成区域由两部分组成：
 
@@ -180,11 +182,11 @@ final_inpaint_mask = dilate(revealed_hole) OR target_contour_band
 
 - `revealed_hole` 是物体移动后暴露出的原位置。
 - `target_contour_band` 是目标物体轮廓周围主动留给生成模型重绘的融合带。
-- `kernel_size` 控制空缺膨胀和目标轮廓宽度，Baseline 默认是 5。
+- `kernel_size` 控制空缺膨胀和目标轮廓宽度，UI 提供 1–31 px 的奇数核滑块，默认是 5 px。
 
-黑白网格不是 `bi_warp` 生成的纹理。它是原始 UI 和当前 Baseline wrapper 在 `inpaint_mask` 区域绘制的占位提示，表示这些像素还需要 diffusion inpainting。原始 Inpaint4Drag 会把同一个 Mask 作为 `mask_image` 传给 Stable Diffusion Inpainting。
+当前 Baseline wrapper 在 `inpaint_mask` 区域使用 Photoshop 风格的灰白棋盘格占位。该占位属于预览表现，表示这些像素还需要 diffusion inpainting；原始 Inpaint4Drag 会把同一个 Mask 作为 `mask_image` 传给 Stable Diffusion Inpainting。
 
-后续可以把 `kernel_size` 暴露为实验参数，研究融合带宽度对预览与最终生成质量的影响；Baseline 的默认值和默认路径仍应保持不变。
+Baseline 和 My Warp 都从 `/api/warp` 接收同一个 `inpaint_kernel_size`，便于直接研究融合带宽度对预览与最终生成质量的影响。
 
 ### 5.3 浏览器浮点点击失效问题
 
@@ -205,7 +207,7 @@ final_inpaint_mask = dilate(revealed_hole) OR target_contour_band
 3. 使用定点迭代构造 backward map。
 4. 通过反向 Warp source mask 获得 target mask。
 5. 使用浮点映射和双线性图像采样。
-6. 缓存网格图案与 source-hole preview base。
+6. 缓存空洞占位图与 source-hole preview base。
 
 当前实验结论：关闭“自动固定远端边界”后，Baseline 和 My Warp 的表现接近；自动加入远端零位移锚点会明显限制形变传播，容易产生不自然的拉扯，不适合作为默认优化。
 
@@ -216,7 +218,7 @@ final_inpaint_mask = dilate(revealed_hole) OR target_contour_band
 ### 7.1 图像分辨率
 
 - 默认预览长边为 1080。
-- 输入框提供 640、1080、2160 建议值，也可以手动输入其他数值。
+- 预览长边使用数字输入框直接填写，允许范围为 320–4096 px。
 - 选定值表示长边，图像严格保持原始宽高比。
 - 示例：1920×1080 设置长边 1080 后得到 1080×608；1080×1920 得到 608×1080。
 - 画布像素尺寸和页面 stage 显示尺寸分别计算，但使用同一个宽高比。
@@ -236,10 +238,12 @@ final_inpaint_mask = dilate(revealed_hole) OR target_contour_band
 Mask 在所有模式下持续可见：
 
 - 画笔绘制过程中和绘制完成后使用同一种半透明红色。
-- 当前颜色为 RGB `(255, 62, 92)`，alpha 为 36%（Canvas 像素约 92/255）。
+- 当前颜色为 RGB `(255, 62, 92)`，显示 alpha 统一为 36%。Mask 底图保存为不透明二值图层，只在绘制到屏幕时应用一次 alpha，避免拖动笔迹重叠导致透明度累积。
 - 不额外绘制高不透明度边缘。
 - 整体变换模式中，Mask 随 object 一起变换。
 - 非刚性模式中，原始 Mask 固定在原位置，便于比较 source 与 warped result。
+
+Mask 来源工具与编辑方式使用独立的预览状态。切换到画笔、橡皮或 SAM 时，右侧画布保留当前变换结果；返回非刚性编辑时继续显示已有结果，返回整体变换时用最新 Mask assets 同步重绘当前变换状态。
 
 为了支持较高分辨率，画笔移动时直接增量绘制 overlay，而不是每个 pointer move 都重建整幅 RGBA Mask；pointer up 后再统一重建 Mask assets 并同步给 Python。
 
@@ -249,8 +253,10 @@ Mask 在所有模式下持续可见：
 
 - 原图保持不动。
 - 原始 Mask 保持在原位置。
-- Warp 后的 target region 与网格空缺区域通过半透明 Ghost 图层显示。
-- Ghost 透明度范围为 20%–100%，默认 72%。
+- Warp 后的 target region 与灰白棋盘格空洞占位通过半透明 Ghost 图层显示。
+- source/target 标注点的显示半径为 4 px，选中态为 5 px，交互命中半径保持为 12 px。
+- Warp 图层透明度范围为 0%–100%，默认 100%。该参数同时作用于非刚性 Warp 和整体变换预览。
+- 空洞扩张大小范围为 1–31 px，使用奇数核并默认取 5 px；拖动滑块会更新整体变换底图或重新请求当前非刚性预览。
 
 当前 Ghost 合成由 Python 的 `compose_ghost_preview()` 完成：只在 `target_mask OR inpaint_mask` 区域混合原图与 warp preview，随后编码为 JPEG 返回。透明度变化会重新请求一次 Python Warp。若后续专门优化透明度滑动性能，可以让 Python 返回带 alpha 的 Warp layer，并在浏览器只调整显示 alpha；Warp、位移场和 Mask 计算仍然保留在 Python。
 
@@ -259,11 +265,14 @@ Mask 在所有模式下持续可见：
 整体变换由浏览器 Canvas 连续绘制：
 
 - object 使用当前 Mask 从原图中提取。
-- source 区域显示网格占位。
 - object 通过 translate/rotate/uniform scale 绘制到目标位置。
+- 浏览器使用同一变换矩阵生成 target mask，并计算 `dilate(source AND NOT target) OR target_contour_band`。
+- source hole 和移动后 object 的轮廓融合带都显示 Photoshop 风格的灰白棋盘格占位。
+- 方形核膨胀通过横向、纵向滑动窗口实时计算。
+- 完整变换结果先在独立 Canvas 合成，再按 Warp 图层透明度与原图混合一次。
 - Mask overlay 使用相同矩阵变换。
 
-当前 Demo 尚未为整体变换生成独立的 Python inpaint mask，也没有把整体变换结果接入最终生成模型。
+整体变换的 inpaint preview mask 当前由浏览器生成；最终生成模型接口尚未接入。
 
 ## 8. SAM 接入
 
@@ -357,7 +366,7 @@ git diff --check
 ## 11. 推荐的后续实验顺序
 
 1. 固定 Baseline，建立一组典型图片、Mask 和 point pairs 的可视化回归样例。
-2. 暴露 `inpaint kernel_size`，分别评价真实空缺和目标轮廓融合带。
+2. 使用可调 `inpaint kernel_size`，分别评价真实空缺和目标轮廓融合带。
 3. 将 My Warp 的六项变化拆成独立开关或独立实现，每次只比较一项。
 4. 把自动边界锚点从默认形变假设转为显式实验变量，研究局部影响范围的更自然表达。
 5. 研究“轮廓线 + 箭头”到结构化 point constraints 的转换，用瘦脸、衣物轮廓和物体弯曲作为案例。

@@ -9,15 +9,15 @@ import numpy as np
 from reference.Inpaint4Drag.utils.drag import bi_warp
 
 
-def checkerboard(image, size=10):
-    background = np.ones(image.shape[:2], np.uint8) * 255
-    background[::size] = 0
-    background[:, ::size] = 0
-    return np.repeat(background[..., None], 3, axis=2)
+def hole_placeholder(image, size=10):
+    """Create a Photoshop-style gray-white transparency grid."""
+    y, x = np.indices(image.shape[:2])
+    value = np.where(((x // size + y // size) & 1) == 0, 240, 200).astype(np.uint8)
+    return np.repeat(value[..., None], 3, axis=2)
 
 
 def warp_preview(image, mask, point_pairs, kernel_size=5):
-    """Apply the same preview composition used by Inpaint4Drag's UI."""
+    """Apply the reference warp with the demo's current preview styling."""
     if not point_pairs:
         return image.copy(), np.zeros(mask.shape, np.uint8), mask.copy()
 
@@ -31,7 +31,7 @@ def warp_preview(image, mask, point_pairs, kernel_size=5):
     preview = image.copy()
     preview[target[:, 1], target[:, 0]] = image[source[:, 1], source[:, 0]]
     preview = np.where(
-        inpaint_mask[..., None] == 1, checkerboard(image), preview
+        inpaint_mask[..., None] == 1, hole_placeholder(image), preview
     )
     target_mask = np.zeros(mask.shape, np.uint8)
     target_mask[target[:, 1], target[:, 0]] = 1
@@ -52,8 +52,8 @@ class BaselineWarpSession:
     def set_mask(self, mask):
         self.mask = (mask > 0).astype(np.uint8)
 
-    def preview(self, point_pairs):
+    def preview(self, point_pairs, kernel_size=5):
         preview, self.inpaint_mask, self.target_mask = warp_preview(
-            self.image, self.mask, point_pairs
+            self.image, self.mask, point_pairs, kernel_size
         )
         return preview, self.inpaint_mask, self.target_mask
