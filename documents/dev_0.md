@@ -2,6 +2,8 @@
 
 更新时间：2026-08-27
 
+生成重绘阶段的当前实现见 `documents/dev_2.md`。
+
 本文面向后续参与本项目的模型与开发者，记录产品目标、已经确认的交互设计、当前代码架构、算法基线、实验结论、已修复问题和后续研究方向。开始新的开发任务前，应先阅读本文和项目根目录的 `AGENTS.md`。
 
 ## 1. 项目目标
@@ -272,7 +274,8 @@ Mask 来源工具与编辑方式使用独立的预览状态。切换到画笔、
 - 完整变换结果先在独立 Canvas 合成，再按 Warp 图层透明度与原图混合一次。
 - Mask overlay 使用相同矩阵变换。
 
-整体变换的 inpaint preview mask 当前由浏览器生成；最终生成模型接口尚未接入。
+整体变换的 inpaint preview mask 由浏览器生成，并与干净 Warp 参考图一起用于
+`/api/generate`；完整生成语义见 `documents/dev_2.md`。
 
 ## 8. SAM 接入
 
@@ -333,12 +336,12 @@ python demo.py --host 0.0.0.0 --no-browser
 
 ```powershell
 D:\anaconda3\envs\pytorch-cpu\python.exe -m unittest discover -s tests -v
-D:\anaconda3\envs\pytorch-cpu\python.exe -m py_compile demo.py baseline_warp.py my_warp.py sam_provider.py
+D:\anaconda3\envs\pytorch-cpu\python.exe -m py_compile demo.py baseline_warp.py my_warp.py sam_provider.py flux_inpaint_provider.py
 node --check web/app.js
 git diff --check
 ```
 
-当前共有 7 个算法测试：
+当前共有 12 个算法与生成输入测试，覆盖：
 
 - Baseline 单点对区域平移。
 - 控制点只影响所属连通区域。
@@ -347,6 +350,8 @@ git diff --check
 - My Warp 的 IDW 控制点匹配。
 - My Warp 边界锚点行为。
 - My Warp preview、mask 和 displacement field 输出。
+- 生成请求的 Warp 输入重算。
+- `inpaint_mask | target_mask` 合并与局部 image reference 构造。
 
 实际 HTTP 联调也已验证 `/api/image`、`/api/mask` 和 `/api/warp`。使用参考 512×512 样例和浮点 point pair 时，Baseline 能正常返回 target mask 与 inpaint mask。
 
@@ -354,7 +359,7 @@ git diff --check
 
 以下内容是后续工作的明确上下文：
 
-- Demo 当前重点是实时 Warp preview，没有接入最终 diffusion refine 流程。
+- Demo 使用实时 Warp preview，并通过 FLUX.2 Klein 完成最终 diffusion refine。
 - `refine_mask()` 是保留接口，当前不修改用户 Mask。
 - SAM 需要单独安装包并提供 checkpoint。
 - 2160 长边可用于性能实验，但 Baseline 和大图编码往返可能无法达到每帧实时。
@@ -373,7 +378,7 @@ git diff --check
 6. 为 motion 与 deformation 建立不同算法路径，避免由同一组 point pairs 猜测意图。
 7. 评估 Ghost RGBA 图层和 Warp 结果缓存，减少透明度调整与重复请求的开销。
 8. 在有 GPU 的服务器接入 SAM，测试单点误选、多个相邻 object 和细小结构。
-9. 在 Warp preview 稳定后，再接入 diffusion inpainting，保持预览阶段与最终生成阶段解耦。
+9. 建立 FLUX.2 Klein 生成质量样例，评估 Mask 范围、参考图裁剪和提示词对畸变修复的影响。
 10. 对转脸等任务单独验证深度/三维重建到二维 flow、可见性 Mask 和 inpainting Mask 的完整链路。
 
 ## 12. 新会话开始时的检查清单

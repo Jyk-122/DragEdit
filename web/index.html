@@ -3,49 +3,113 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DragEdit Preview</title>
+  <title>DragEdit</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <aside class="panel">
-    <header>
+  <header class="app-header">
+    <div>
       <div class="eyebrow">DRAG-BASED IMAGE EDITING</div>
-      <h1>DragEdit Preview</h1>
-      <p>浏览器负责鼠标交互，Python 负责非刚性变形和 Mask 计算。</p>
-    </header>
+      <h1>DragEdit</h1>
+    </div>
+    <p id="instructions">请先加载图像。</p>
+  </header>
 
-    <section>
-      <h2>1. 图像</h2>
-      <label class="file-button">
-        选择图像
-        <input id="imageInput" type="file" accept="image/*">
-      </label>
-      <label class="number-row">
-        <span>预览长边</span>
-        <input id="previewLongEdge" type="number" min="320" max="4096" step="1" value="1080">
-        <span>px</span>
-      </label>
-    </section>
+  <main id="workspace">
+    <div id="stagesArea" class="stage-grid">
+      <article class="viewer-card">
+        <header class="viewer-title">
+          <span>Mask 与拖拽编辑</span>
+          <span class="viewer-badge">编辑台</span>
+        </header>
+        <div id="editorViewport" class="viewer-body">
+          <div id="emptyState" class="empty-state">
+            <strong>选择一张图像开始</strong>
+            <span>在下方工具栏完成 Mask、拖拽和局部重绘。</span>
+          </div>
+          <div id="stage" class="image-stage" hidden>
+            <canvas id="previewCanvas"></canvas>
+            <canvas id="overlayCanvas"></canvas>
+          </div>
+        </div>
+      </article>
 
-    <section>
-      <h2>2. Mask 来源</h2>
+      <article class="viewer-card">
+        <header class="viewer-title">
+          <span>原图 / 生成图</span>
+          <span class="viewer-badge">对比台</span>
+        </header>
+        <div id="comparisonViewport" class="viewer-body">
+          <div id="comparisonEmpty" class="empty-state">
+            <strong>等待生成结果</strong>
+            <span>生成后拖动竖线查看原图与重绘结果。</span>
+          </div>
+          <div id="comparisonStage" class="comparison-stage" hidden>
+            <canvas id="generatedCanvas"></canvas>
+            <canvas id="originalCanvas"></canvas>
+            <div id="comparisonDivider" class="comparison-divider">
+              <span class="divider-handle">↔</span>
+            </div>
+            <span class="comparison-label label-original">原图</span>
+            <span class="comparison-label label-generated">生成图</span>
+          </div>
+        </div>
+        <div id="pipelineInputs" class="pipeline-inputs" hidden>
+          <figure>
+            <img id="debugImageInput" alt="Pipeline image input">
+            <figcaption><code>image</code><span id="debugImageInputSize"></span></figcaption>
+          </figure>
+          <figure>
+            <img id="debugImageReference" alt="Pipeline image reference input">
+            <figcaption><code>image_reference</code><span id="debugImageReferenceSize"></span></figcaption>
+          </figure>
+          <figure>
+            <img id="debugMaskImage" alt="Pipeline mask image input">
+            <figcaption><code>mask_image</code><span id="debugMaskImageSize"></span></figcaption>
+          </figure>
+        </div>
+      </article>
+    </div>
+
+    <footer id="footer">
+      <span id="status">等待图像</span>
+      <span id="performance"></span>
+    </footer>
+  </main>
+
+  <aside class="toolbar">
+    <section class="tool-group image-mask-tools">
+      <h2><span>1</span> 图像与 Mask</h2>
+      <div class="control-row">
+        <label class="file-button">
+          选择图像
+          <input id="imageInput" type="file" accept="image/*">
+        </label>
+        <label class="number-row">
+          <span>预览长边</span>
+          <input id="previewLongEdge" type="number" min="320" max="4096" step="1" value="1080">
+          <span>px</span>
+        </label>
+      </div>
       <div class="button-grid mask-tools">
         <button data-mode="paint" class="mode-button">手动画笔</button>
         <button data-mode="erase" class="mode-button">橡皮</button>
-        <button data-mode="sam" class="mode-button" disabled>SAM 点选对象</button>
+        <button data-mode="sam" class="mode-button" disabled>SAM 点选</button>
+        <button id="clearMask">清空 Mask</button>
       </div>
       <label class="range-row">
         <span>画笔大小</span>
         <input id="brushSize" type="range" min="4" max="100" value="32">
       </label>
-      <div class="inline-buttons">
-        <button id="clearMask">清空 Mask</button>
-      </div>
-      <p id="samHint" class="section-hint">配置 SAM 后，加载图像会先完成特征提取；随后点击对象即可生成其 Mask。</p>
+      <p id="samHint" class="section-hint">加载图像后检查 SAM 状态。</p>
     </section>
 
-    <section>
-      <h2>3. 编辑方式</h2>
+    <section class="tool-group edit-tools">
+      <h2><span>2</span> 拖拽编辑</h2>
+      <div class="button-grid edit-tabs">
+        <button data-mode="transform" class="mode-button">二维整体变换</button>
+        <button data-mode="deform" class="mode-button">二维非刚形变</button>
+      </div>
       <label class="select-row">
         <span>Warp 算法</span>
         <select id="warpAlgorithm">
@@ -53,50 +117,42 @@
           <option value="my_warp">My Warp（实验版本）</option>
         </select>
       </label>
-      <div class="edit-tabs">
-        <button data-mode="transform" class="mode-button">二维整体变换</button>
-        <button data-mode="deform" class="mode-button">二维非刚形变</button>
-      </div>
       <label id="boundaryAnchorRow" class="check-row" hidden>
         <input id="boundaryAnchors" type="checkbox" checked>
         <span>自动固定远端边界</span>
       </label>
       <label class="range-row">
-        <span>Warp 图层透明度</span>
+        <span>Warp 透明度</span>
         <input id="warpOpacity" type="range" min="0" max="100" value="100">
         <output id="warpOpacityValue">100%</output>
       </label>
       <label class="range-row">
-        <span>空洞扩张大小</span>
+        <span>空洞扩张</span>
         <input id="inpaintKernelSize" type="range" min="1" max="31" step="2" value="5">
         <output id="inpaintKernelSizeValue">5 px</output>
       </label>
-      <div class="inline-buttons">
+      <div class="button-grid">
         <button id="deletePair">删除选中点对</button>
         <button id="resetEdit">重置编辑</button>
       </div>
     </section>
 
-    <section class="tips">
-      <h2>当前操作</h2>
-      <p id="instructions">请先加载图像。</p>
+    <section class="tool-group generation-tools">
+      <h2><span>3</span> 生成重绘</h2>
+      <label class="prompt-row">
+        <span>提示词</span>
+        <textarea id="generationPrompt" rows="4">Use the image reference as the exact target layout. Re-render the edited region so that the result follows the local deformation, displacement, scale, and rotation shown in the reference image. Preserve the object's identity and intended geometry while repairing warp-induced stretching, blur, tearing, holes, seams, duplicated content, and other implausible regions. Keep the surrounding image unchanged and blend the repaired region naturally with the background.</textarea>
+      </label>
+      <div class="generation-parameters">
+        <label><span>Steps</span><input id="generationSteps" type="number" min="1" max="50" value="4"></label>
+        <label><span>Strength</span><input id="generationStrength" type="number" min="0" max="1" step="0.05" value="1"></label>
+        <label><span>Guidance</span><input id="generationGuidance" type="number" min="0" max="20" step="0.1" value="1"></label>
+        <label><span>Seed</span><input id="generationSeed" type="number" min="0" step="1" value="0"></label>
+      </div>
+      <button id="generateImage" class="primary-button" disabled>生成图片</button>
+      <p id="generationHint" class="section-hint">FLUX.2 Klein 会在服务启动时加载。</p>
     </section>
   </aside>
-
-  <main>
-    <div id="emptyState">
-      <strong>选择一张图像开始</strong>
-      <span>图像会按照设置的长边分辨率等比例缩放。</span>
-    </div>
-    <div id="stage" hidden>
-      <canvas id="previewCanvas"></canvas>
-      <canvas id="overlayCanvas"></canvas>
-    </div>
-    <footer>
-      <span id="status">等待图像</span>
-      <span id="performance"></span>
-    </footer>
-  </main>
 
   <script type="module" src="app.js"></script>
 </body>

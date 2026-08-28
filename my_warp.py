@@ -172,15 +172,16 @@ def hole_placeholder(image, size=10):
     return np.repeat(value[..., None], 3, axis=2)
 
 
-def warp_preview(
+def _warp_result(
     image, mask, point_pairs, keep_boundary=True, kernel_size=5,
     pattern=None, base=None
 ):
-    """Return the warped RGB preview, inpainting mask and dense displacement field."""
+    """Return clean/styled warp composites, masks and displacement field."""
     if not point_pairs:
         empty = np.zeros(mask.shape, np.uint8)
         field = np.zeros((*mask.shape, 2), np.float32)
-        return image.copy(), empty, field, mask.copy()
+        clean = image.copy()
+        return clean, clean.copy(), empty, field, mask.copy()
 
     source_points = np.array([pair[0] for pair in point_pairs], np.float32)
     target_points = np.array([pair[1] for pair in point_pairs], np.float32)
@@ -199,11 +200,24 @@ def warp_preview(
     pattern = hole_placeholder(image) if pattern is None else pattern
     base = np.where(mask[..., None] > 0, pattern, image) if base is None else base
     target_mask = alpha >= 0.5
+    clean = image.copy()
+    clean[target_mask] = warped[target_mask]
     preview = base.copy()
     preview[target_mask] = warped[target_mask]
     inpaint_mask = build_inpaint_mask(mask > 0, target_mask, kernel_size)
     preview[inpaint_mask > 0] = pattern[inpaint_mask > 0]
-    return preview, inpaint_mask, displacement, target_mask.astype(np.uint8)
+    return clean, preview, inpaint_mask, displacement, target_mask.astype(np.uint8)
+
+
+def warp_preview(
+    image, mask, point_pairs, keep_boundary=True, kernel_size=5,
+    pattern=None, base=None
+):
+    """Return the warped RGB preview, inpainting mask and dense displacement field."""
+    _, preview, inpaint_mask, displacement, target_mask = _warp_result(
+        image, mask, point_pairs, keep_boundary, kernel_size, pattern, base
+    )
+    return preview, inpaint_mask, displacement, target_mask
 
 
 class MyWarpSession:
@@ -212,6 +226,7 @@ class MyWarpSession:
         self.mask = None
         self.inpaint_mask = None
         self.target_mask = None
+        self.warped_image = None
         self.pattern = None
         self.base = None
         build_displacement_field(
@@ -221,6 +236,9 @@ class MyWarpSession:
     def set_image(self, image):
         self.image = image
         self.mask = np.zeros(image.shape[:2], np.uint8)
+        self.inpaint_mask = np.zeros(image.shape[:2], np.uint8)
+        self.target_mask = self.mask.copy()
+        self.warped_image = image.copy()
         # OPTIMIZATION 6: cache preview-only arrays outside the drag loop.
         self.pattern = hole_placeholder(image)
         self.base = image.copy()
@@ -230,7 +248,10 @@ class MyWarpSession:
         self.base = np.where(self.mask[..., None] > 0, self.pattern, self.image)
 
     def preview(self, point_pairs, keep_boundary=True, kernel_size=5):
-        preview, self.inpaint_mask, displacement, self.target_mask = warp_preview(
+        (
+            self.warped_image, preview, self.inpaint_mask,
+            displacement, self.target_mask,
+        ) = _warp_result(
             self.image, self.mask, point_pairs, keep_boundary, kernel_size,
             pattern=self.pattern, base=self.base
         )

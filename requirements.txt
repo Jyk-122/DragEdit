@@ -3,4 +3,9 @@ opencv-python
 Pillow
 numba
 torch
+diffusers @ git+https://github.com/huggingface/diffusers.git
+transformers
+accelerate
+safetensors
+sentencepiece
 # Optional SAM backend: pip install git+https://github.com/facebookresearch/segment-anything.git

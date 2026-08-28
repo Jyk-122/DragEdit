@@ -5,7 +5,14 @@ const overlay = overlayCanvas.getContext("2d");
 const stage = document.querySelector("#stage");
 const workspace = document.querySelector("main");
 const footer = document.querySelector("footer");
+const editorViewport = document.querySelector("#editorViewport");
+const comparisonViewport = document.querySelector("#comparisonViewport");
 const emptyState = document.querySelector("#emptyState");
+const comparisonEmpty = document.querySelector("#comparisonEmpty");
+const comparisonStage = document.querySelector("#comparisonStage");
+const generatedCanvas = document.querySelector("#generatedCanvas");
+const originalCanvas = document.querySelector("#originalCanvas");
+const pipelineInputs = document.querySelector("#pipelineInputs");
 const statusText = document.querySelector("#status");
 const performanceText = document.querySelector("#performance");
 const instructions = document.querySelector("#instructions");
@@ -21,6 +28,27 @@ const inpaintKernelSizeValue = document.querySelector("#inpaintKernelSizeValue")
 const boundaryAnchorRow = document.querySelector("#boundaryAnchorRow");
 const samButton = document.querySelector('[data-mode="sam"]');
 const samHint = document.querySelector("#samHint");
+const generateButton = document.querySelector("#generateImage");
+const generationPrompt = document.querySelector("#generationPrompt");
+const generationSteps = document.querySelector("#generationSteps");
+const generationStrength = document.querySelector("#generationStrength");
+const generationGuidance = document.querySelector("#generationGuidance");
+const generationSeed = document.querySelector("#generationSeed");
+const generationHint = document.querySelector("#generationHint");
+const debugInputViews = {
+  image: {
+    image: document.querySelector("#debugImageInput"),
+    size: document.querySelector("#debugImageInputSize"),
+  },
+  image_reference: {
+    image: document.querySelector("#debugImageReference"),
+    size: document.querySelector("#debugImageReferenceSize"),
+  },
+  mask_image: {
+    image: document.querySelector("#debugMaskImage"),
+    size: document.querySelector("#debugMaskImageSize"),
+  },
+};
 const MASK_OPACITY = 0.36;
 const MASK_MODES = new Set(["paint", "erase", "sam"]);
 
@@ -31,6 +59,7 @@ let mask = null;
 let maskBounds = null;
 let objectCanvas = null;
 let transformCanvas = null;
+let transformReferenceCanvas = null;
 let transformMaskCanvas = null;
 let transformMaskBuffers = null;
 let maskOverlayCanvas = null;
@@ -44,6 +73,7 @@ let pendingWarp = null;
 let warpInFlight = false;
 let warpEpoch = 0;
 let currentImageFile = null;
+let comparisonPosition = 50;
 
 let painting = false;
 let lastPaintPoint = null;
@@ -114,14 +144,24 @@ function scaledImageSize(imageWidth, imageHeight) {
 
 
 function layoutStage() {
-  const style = getComputedStyle(workspace);
-  const availableWidth = workspace.clientWidth -
-    parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-  const availableHeight = workspace.clientHeight - footer.offsetHeight -
-    parseFloat(style.paddingTop) - parseFloat(style.paddingBottom) - 16;
+  const availableSpace = viewport => {
+    const style = getComputedStyle(viewport);
+    return {
+      width: viewport.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight),
+      height: viewport.clientHeight - parseFloat(style.paddingTop) - parseFloat(style.paddingBottom),
+    };
+  };
+  const editorSpace = availableSpace(editorViewport);
+  const comparisonSpace = availableSpace(comparisonViewport);
+  const availableWidth = Math.min(editorSpace.width, comparisonSpace.width);
+  const availableHeight = Math.min(editorSpace.height, comparisonSpace.height);
   const scale = Math.min(1, availableWidth / width, availableHeight / height);
-  stage.style.width = `${Math.round(width * scale)}px`;
-  stage.style.height = `${Math.round(height * scale)}px`;
+  const displayWidth = Math.round(width * scale);
+  const displayHeight = Math.round(height * scale);
+  for (const imageStage of [stage, comparisonStage]) {
+    imageStage.style.width = `${displayWidth}px`;
+    imageStage.style.height = `${displayHeight}px`;
+  }
 }
 
 
@@ -133,7 +173,10 @@ async function loadImage(file) {
 
   previewCanvas.width = overlayCanvas.width = width;
   previewCanvas.height = overlayCanvas.height = height;
+  generatedCanvas.width = originalCanvas.width = width;
+  generatedCanvas.height = originalCanvas.height = height;
   stage.style.aspectRatio = `${width} / ${height}`;
+  comparisonStage.style.aspectRatio = `${width} / ${height}`;
   preview.drawImage(bitmap, 0, 0, width, height);
   original = preview.getImageData(0, 0, width, height);
   sourceCanvas = document.createElement("canvas");
@@ -143,6 +186,9 @@ async function loadImage(file) {
   transformCanvas = document.createElement("canvas");
   transformCanvas.width = width;
   transformCanvas.height = height;
+  transformReferenceCanvas = document.createElement("canvas");
+  transformReferenceCanvas.width = width;
+  transformReferenceCanvas.height = height;
   transformMaskCanvas = document.createElement("canvas");
   transformMaskCanvas.width = width;
   transformMaskCanvas.height = height;
@@ -157,6 +203,9 @@ async function loadImage(file) {
   updateMaskAssets(false);
   emptyState.hidden = true;
   stage.hidden = false;
+  comparisonEmpty.hidden = false;
+  comparisonStage.hidden = true;
+  pipelineInputs.hidden = true;
   layoutStage();
   setMode("paint");
   samButton.disabled = true;
@@ -166,6 +215,8 @@ async function loadImage(file) {
     samHint.textContent = metadata.sam_ready
       ? `SAM 预处理完成（${metadata.sam_preprocess_ms.toFixed(0)} ms），点击对象即可生成 Mask。`
       : "SAM 未配置；当前可使用画笔绘制 Mask。启动时传入 --sam-checkpoint 可启用点选对象。";
+    generationHint.textContent = `${metadata.generation_model} 已加载，可使用当前编辑结果生成重绘。`;
+    generateButton.disabled = false;
     await syncMask();
     return metadata;
   });
@@ -446,16 +497,18 @@ function renderPreview() {
 function renderTransformPreview() {
   if (!original) return;
   const started = performance.now();
+  const reference = transformReferenceCanvas.getContext("2d");
+  reference.setTransform(1, 0, 0, 1, 0, 0);
+  reference.clearRect(0, 0, width, height);
+  reference.putImageData(original, 0, 0);
+  if (maskBounds) drawTransformedAsset(reference, objectCanvas);
+
   const transformed = transformCanvas.getContext("2d");
   transformed.setTransform(1, 0, 0, 1, 0, 0);
   transformed.clearRect(0, 0, width, height);
   const transformedState = Math.abs(transform.x) > 1e-4 || Math.abs(transform.y) > 1e-4 ||
     Math.abs(transform.angle) > 1e-4 || Math.abs(transform.scale - 1) > 1e-4;
-  transformed.putImageData(original, 0, 0);
-
-  if (maskBounds) {
-    drawTransformedAsset(transformed, objectCanvas);
-  }
+  transformed.drawImage(transformReferenceCanvas, 0, 0);
 
   if (maskBounds && transformedState) {
     const inpaintMask = buildTransformInpaintMask();
@@ -528,6 +581,144 @@ async function runWarpQueue() {
   warpInFlight = false;
   runWarpQueue();
 }
+
+
+function maskDataUrl(values) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  for (let pixel = 0; pixel < values.length; pixel++) {
+    const value = values[pixel] ? 255 : 0;
+    const index = pixel * 4;
+    pixels[index] = value;
+    pixels[index + 1] = value;
+    pixels[index + 2] = value;
+    pixels[index + 3] = 255;
+  }
+  canvas.getContext("2d").putImageData(new ImageData(pixels, width, height), 0, 0);
+  return canvas.toDataURL("image/png");
+}
+
+
+function hasTransformEdit() {
+  return Math.abs(transform.x) > 1e-4 || Math.abs(transform.y) > 1e-4 ||
+    Math.abs(transform.angle) > 1e-4 || Math.abs(transform.scale - 1) > 1e-4;
+}
+
+
+function generationParameters() {
+  return {
+    prompt: generationPrompt.value.trim(),
+    num_inference_steps: Number(generationSteps.value),
+    strength: Number(generationStrength.value),
+    guidance_scale: Number(generationGuidance.value),
+    seed: Number(generationSeed.value),
+    padding_mask_crop: 64,
+  };
+}
+
+
+async function generateImage() {
+  if (!original || !maskBounds) {
+    statusText.textContent = "请先加载图像并选取 Mask。";
+    return;
+  }
+  if (editMode === "transform" && !hasTransformEdit()) {
+    statusText.textContent = "请先平移、旋转或缩放对象。";
+    return;
+  }
+  if (editMode === "deform" && pointPairs.length === 0) {
+    statusText.textContent = "请先建立至少一个 point pair。";
+    return;
+  }
+  if (!editMode) {
+    statusText.textContent = "请先选择一种拖拽编辑方式并完成编辑。";
+    return;
+  }
+
+  await pythonReady;
+  generateButton.disabled = true;
+  generateButton.textContent = "正在生成…";
+  statusText.textContent = "FLUX.2 Klein 正在重绘编辑区域…";
+
+  const request = generationParameters();
+  if (editMode === "transform") {
+    renderTransformPreview();
+    const inpaint = buildTransformInpaintMask();
+    request.image = sourceCanvas.toDataURL("image/png");
+    request.image_reference = transformReferenceCanvas.toDataURL("image/png");
+    request.inpaint_mask = maskDataUrl(inpaint);
+    request.target_mask = maskDataUrl(transformMaskBuffers.target);
+    request.source_mask = maskCanvas.toDataURL("image/png");
+  } else {
+    request.algorithm = warpAlgorithm.value;
+    request.point_pairs = pointPairs.map(pair => ({
+      source: {...pair.source},
+      target: {...pair.target},
+    }));
+    request.keep_boundary = keepBoundary.checked;
+    request.inpaint_kernel_size = Number(inpaintKernelSize.value);
+  }
+
+  try {
+    const response = await fetch("/api/generate", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(request),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "生成失败");
+    await showComparison(result.image, result.pipeline_inputs);
+    const seconds = (result.inference_ms / 1000).toFixed(1);
+    statusText.textContent = `生成完成 · ${result.model}`;
+    performanceText.textContent = `生成 ${seconds} s`;
+  } catch (error) {
+    statusText.textContent = `生成失败：${error.message}`;
+  } finally {
+    generateButton.disabled = false;
+    generateButton.textContent = "生成图片";
+  }
+}
+
+
+async function showComparison(dataUrl, inputs) {
+  const image = new Image();
+  image.src = dataUrl;
+  await image.decode();
+  generatedCanvas.getContext("2d").drawImage(image, 0, 0, width, height);
+  originalCanvas.getContext("2d").putImageData(original, 0, 0);
+  comparisonEmpty.hidden = true;
+  comparisonStage.hidden = false;
+  for (const [name, view] of Object.entries(debugInputViews)) {
+    view.image.src = inputs[name].image;
+    view.size.textContent = `${inputs[name].width}×${inputs[name].height}`;
+  }
+  pipelineInputs.hidden = false;
+  setComparisonPosition(50);
+  layoutStage();
+}
+
+
+function setComparisonPosition(percent) {
+  comparisonPosition = Math.max(0, Math.min(100, percent));
+  comparisonStage.style.setProperty("--comparison-position", `${comparisonPosition}%`);
+}
+
+
+function updateComparison(event) {
+  const rect = comparisonStage.getBoundingClientRect();
+  setComparisonPosition((event.clientX - rect.left) * 100 / rect.width);
+}
+
+
+comparisonStage.addEventListener("pointerdown", event => {
+  comparisonStage.setPointerCapture(event.pointerId);
+  updateComparison(event);
+});
+comparisonStage.addEventListener("pointermove", event => {
+  if (comparisonStage.hasPointerCapture(event.pointerId)) updateComparison(event);
+});
 
 
 function originalPivot() {
@@ -924,6 +1115,7 @@ document.querySelector("#resetEdit").addEventListener("click", () => {
   transform = {x: 0, y: 0, angle: 0, scale: 1};
   schedulePreview();
 });
+generateButton.addEventListener("click", generateImage);
 
 
 warpOpacityValue.textContent = `${warpOpacity.value}%`;

@@ -14,6 +14,7 @@ import numpy as np
 from PIL import Image
 
 from baseline_warp import BaselineWarpSession
+from flux_inpaint_provider import DEFAULT_PROMPT, FluxInpaintProvider
 from my_warp import MyWarpSession
 from sam_provider import SamMaskProvider
 
@@ -26,6 +27,7 @@ WARP_SESSIONS = {
 }
 LAST_SESSION = WARP_SESSIONS["baseline"]
 SAM_PROVIDER = SamMaskProvider()
+FLUX_PROVIDER = None
 
 
 def refine_mask(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -54,6 +56,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 "height": image.shape[0],
                 "sam_ready": SAM_PROVIDER.enabled,
                 "sam_preprocess_ms": (time.perf_counter() - started) * 1000,
+                "generation_model": FLUX_PROVIDER.model_id,
             })
             return
 
@@ -112,15 +115,37 @@ class DemoHandler(SimpleHTTPRequestHandler):
             })
             return
 
+        if self.path == "/api/generate":
+            try:
+                generated, inference_ms, pipeline_inputs = generate_image(request)
+                encoded = cv2.imencode(
+                    ".png", cv2.cvtColor(generated, cv2.COLOR_RGB2BGR)
+                )[1]
+                self.send_json({
+                    "image": "data:image/png;base64," +
+                             base64.b64encode(encoded).decode(),
+                    "inference_ms": inference_ms,
+                    "model": FLUX_PROVIDER.model_id,
+                    "pipeline_inputs": {
+                        name: encode_pil_debug_image(image)
+                        for name, image in pipeline_inputs.items()
+                    },
+                })
+            except ValueError as error:
+                self.send_json({"error": str(error)}, 400)
+            except Exception as error:
+                self.send_json({"error": str(error)}, 500)
+            return
+
         self.send_error(404)
 
     def read_json(self):
         length = int(self.headers["Content-Length"])
         return json.loads(self.rfile.read(length))
 
-    def send_json(self, response):
+    def send_json(self, response, status=200):
         body = json.dumps(response).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
@@ -141,6 +166,17 @@ def decode_data_url(data_url, mode):
     return np.array(Image.open(io.BytesIO(data)).convert(mode))
 
 
+def encode_pil_debug_image(image):
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return {
+        "image": "data:image/png;base64," +
+                 base64.b64encode(buffer.getvalue()).decode(),
+        "width": image.width,
+        "height": image.height,
+    }
+
+
 def compose_ghost_preview(image, warped, target_mask, inpaint_mask, opacity):
     """Overlay warped pixels and revealed holes while keeping the source visible."""
     result = image.copy()
@@ -151,20 +187,81 @@ def compose_ghost_preview(image, warped, target_mask, inpaint_mask, opacity):
     return result
 
 
+def generate_image(request):
+    """Resolve browser/server warp inputs and run FLUX.2 Klein inpainting."""
+    if "image_reference" in request:
+        image = decode_data_url(request["image"], "RGB")
+        warped_image = decode_data_url(request["image_reference"], "RGB")
+        inpaint_mask = decode_data_url(request["inpaint_mask"], "L")
+        target_mask = decode_data_url(request["target_mask"], "L")
+        source_mask = decode_data_url(request["source_mask"], "L")
+    else:
+        algorithm = request.get("algorithm", "baseline")
+        session = WARP_SESSIONS[algorithm]
+        if "point_pairs" in request:
+            point_pairs = [
+                ([pair["source"]["x"], pair["source"]["y"]],
+                 [pair["target"]["x"], pair["target"]["y"]])
+                for pair in request["point_pairs"]
+            ]
+            kernel_size = int(request.get("inpaint_kernel_size", 5))
+            if algorithm == "baseline":
+                session.preview(point_pairs, kernel_size)
+            else:
+                session.preview(
+                    point_pairs, request.get("keep_boundary", True), kernel_size
+                )
+        image = session.image
+        warped_image = session.warped_image
+        inpaint_mask = session.inpaint_mask
+        target_mask = session.target_mask
+        source_mask = session.mask
+        if image is None or warped_image is None:
+            raise ValueError("请先加载图像并完成一次拖拽编辑。")
+
+    return FLUX_PROVIDER.generate(
+        image=image,
+        warped_image=warped_image,
+        inpaint_mask=inpaint_mask,
+        target_mask=target_mask,
+        source_mask=source_mask,
+        prompt=request.get("prompt") or DEFAULT_PROMPT,
+        strength=float(request.get("strength", 1.0)),
+        num_inference_steps=int(request.get("num_inference_steps", 4)),
+        guidance_scale=float(request.get("guidance_scale", 1.0)),
+        seed=int(request.get("seed", 0)),
+        padding_mask_crop=int(request.get("padding_mask_crop", 64)),
+    )
+
+
 def main():
-    global SAM_PROVIDER
+    global SAM_PROVIDER, FLUX_PROVIDER
     parser = argparse.ArgumentParser(description="DragEdit local interaction demo")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7860)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--sam-checkpoint")
     parser.add_argument("--sam-model-type", default="vit_b")
-    parser.add_argument("--sam-device")
+    parser.add_argument("--sam-device", default="cuda")
+    parser.add_argument(
+        "--flux-model", default="black-forest-labs/FLUX.2-klein-4B"
+    )
+    parser.add_argument("--flux-device", default="cuda")
+    parser.add_argument("--flux-cache-dir")
+    parser.add_argument("--flux-cpu-offload", action="store_true")
     args = parser.parse_args()
 
     SAM_PROVIDER = SamMaskProvider(
         args.sam_checkpoint, args.sam_model_type, args.sam_device
     )
+    print(f"Loading generation model: {args.flux_model}")
+    FLUX_PROVIDER = FluxInpaintProvider(
+        args.flux_model,
+        args.flux_device,
+        args.flux_cache_dir,
+        args.flux_cpu_offload,
+    )
+    print(f"Generation model ready on {FLUX_PROVIDER.device}")
 
     handler = partial(DemoHandler, directory=WEB_DIR)
     server = ThreadingHTTPServer((args.host, args.port), handler)

@@ -2,6 +2,8 @@
 
 更新时间：2026-08-27
 
+生成重绘阶段的当前实现见 `documents/dev_2.md`。
+
 本文记录 `Dev_0` 之后确认的前端交互、Warp 预览合成和 inpaint 空洞参数设计。后续开发应先阅读根目录 `AGENTS.md`、`documents/dev_0.md`，再阅读本文。
 
 ## 1. 本阶段结果
