@@ -73,6 +73,22 @@ class FluxInpaintProvider:
         else:
             self.pipe.to(self.device)
         self.lock = threading.Lock()
+        self.progress_lock = threading.Lock()
+        self.progress = {
+            "running": False,
+            "percent": 0,
+            "step": 0,
+            "steps": 0,
+            "stage": "等待生成",
+        }
+
+    def set_progress(self, **values):
+        with self.progress_lock:
+            self.progress.update(values)
+
+    def get_progress(self):
+        with self.progress_lock:
+            return self.progress.copy()
 
     def generate(
         self,
@@ -88,11 +104,21 @@ class FluxInpaintProvider:
         seed=0,
         padding_mask_crop=64,
     ):
+        effective_steps = max(1, int(num_inference_steps * strength))
+        self.set_progress(
+            running=True,
+            percent=2,
+            step=0,
+            steps=effective_steps,
+            stage="正在准备 Pipeline 输入",
+        )
         repair_mask = build_repair_mask(inpaint_mask, target_mask)
         if not repair_mask.any():
+            self.set_progress(running=False, percent=0, stage="重绘区域为空")
             raise ValueError("重绘区域为空，请先完成一次拖拽编辑。")
+        reference_padding = 64 if padding_mask_crop is None else padding_mask_crop
         image_reference = prepare_image_reference(
-            warped_image, source_mask, target_mask, padding_mask_crop
+            warped_image, source_mask, target_mask, reference_padding
         )
         pipeline_inputs = {
             "image": Image.fromarray(image).convert("RGB"),
@@ -102,21 +128,57 @@ class FluxInpaintProvider:
         generator_device = self.device if self.device.startswith("cuda") else "cpu"
         generator = self.torch.Generator(device=generator_device).manual_seed(seed)
 
+        def on_step_end(pipe, step, timestep, callback_kwargs):
+            completed = min(step + 1, effective_steps)
+            self.set_progress(
+                running=True,
+                percent=min(95, 10 + round(85 * completed / effective_steps)),
+                step=completed,
+                steps=effective_steps,
+                stage=(
+                    "正在解码生成结果"
+                    if completed == effective_steps
+                    else "正在重绘编辑区域"
+                ),
+            )
+            return callback_kwargs
+
         started = time.perf_counter()
-        with self.lock, self.torch.inference_mode():
-            result = self.pipe(
-                prompt=prompt,
-                image=pipeline_inputs["image"],
-                image_reference=pipeline_inputs["image_reference"],
-                mask_image=pipeline_inputs["mask_image"],
-                padding_mask_crop=padding_mask_crop,
-                strength=strength,
-                num_inference_steps=num_inference_steps,
-                guidance_scale=guidance_scale,
-                generator=generator,
-            ).images[0].convert("RGB")
-        if result.size != (image.shape[1], image.shape[0]):
-            result = result.resize((image.shape[1], image.shape[0]), Image.Resampling.LANCZOS)
+        try:
+            with self.lock, self.torch.inference_mode():
+                self.set_progress(
+                    running=True,
+                    percent=8,
+                    stage="正在编码图像与提示词",
+                )
+                result = self.pipe(
+                    prompt=prompt,
+                    image=pipeline_inputs["image"],
+                    image_reference=pipeline_inputs["image_reference"],
+                    mask_image=pipeline_inputs["mask_image"],
+                    padding_mask_crop=padding_mask_crop,
+                    strength=strength,
+                    num_inference_steps=num_inference_steps,
+                    guidance_scale=guidance_scale,
+                    generator=generator,
+                    callback_on_step_end=on_step_end,
+                    callback_on_step_end_tensor_inputs=[],
+                ).images[0].convert("RGB")
+            self.set_progress(running=True, percent=98, stage="正在整理生成结果")
+            if result.size != (image.shape[1], image.shape[0]):
+                result = result.resize(
+                    (image.shape[1], image.shape[0]), Image.Resampling.LANCZOS
+                )
+            self.set_progress(
+                running=False,
+                percent=100,
+                step=effective_steps,
+                steps=effective_steps,
+                stage="生成完成",
+            )
+        except Exception:
+            self.set_progress(running=False, stage="生成失败")
+            raise
         return (
             np.array(result),
             (time.perf_counter() - started) * 1000,

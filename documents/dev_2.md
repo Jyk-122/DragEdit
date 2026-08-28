@@ -74,6 +74,13 @@ Mask 的白色区域由模型重新生成。把 `target_mask` 并入最终 Mask�
 接口返回生成 PNG Data URL、模型名、推理耗时，以及实际传给 Pipeline 的 `image`、
 `image_reference`、`mask_image` 三张 PNG 调试图和各自尺寸。
 
+### `GET /api/generation-progress`
+
+返回当前生成任务的阶段、百分比、已完成 step 和总 step。Provider 通过
+`callback_on_step_end` 在每个实际去噪 step 后更新状态；前端生成期间每 400 ms 轮询一次。
+图像准备、条件编码、去噪和结果整理分别显示阶段信息。4-step 蒸馏模型的去噪区间会按
+实际 step 分段推进。
+
 ## 5. 页面布局
 
 页面使用约 2:4:4 的三列工作区：
@@ -94,6 +101,12 @@ Mask 的白色区域由模型重新生成。把 `target_mask` 并入最终 Mask�
 生成完成后，对比台下方显示 `image`、`image_reference` 和 `mask_image` 三张缩略图。
 这些图直接由 Provider 调用 Pipeline 时使用的 PIL 对象编码，便于核对局部参考图裁剪、
 最终白色重绘区域和原图输入。
+
+三个缩略图均可点击并在模态查看器中按图像原始像素尺寸显示；大于视口的图像使用滚动区域
+查看。查看器支持关闭按钮、Esc 和点击背景关闭。
+
+生成操作台显示实际 Pipeline 进度条、当前阶段、百分比和去噪 step。生成完成后保留 100%
+状态，加载下一张图片时重置。
 
 ## 6. 依赖与启动参数
 
@@ -124,5 +137,21 @@ node --check web/app.js
 git diff --check
 ```
 
-测试集共 12 项，包含既有 Warp 回归，以及生成请求重算、最终 Mask 合并和局部参考图裁剪测试。
+测试集共 13 项，包含既有 Warp 回归，以及生成请求重算、最终 Mask 合并、局部参考图裁剪和
+Pipeline step 进度状态测试。
 模型权重加载与 GPU 推理在安装 Diffusers 主分支和 FLUX.2 Klein 权重的目标环境执行。
+
+## 8. Pipeline 尺寸链路
+
+`padding_mask_crop=64` 会让 Diffusers 计算包含白色 Mask 的裁剪框，并将裁剪框扩展为与工作图
+相同的宽高比。裁剪内容会放大到工作分辨率完成 inpaint，随后缩回相同裁剪框并按 Mask 贴回
+原图。该过程保持裁剪框宽高比，同时会改变模型生成时看到的局部内容尺度。
+
+Klein Pipeline 会把超过约 100 万像素的输入先等比例缩小到约 1MP。Provider 在 Pipeline
+返回尺寸与 Demo 输入尺寸不一致时，将完整结果恢复到 Demo 输入尺寸。默认 1080 px 长边预览
+通常低于该像素阈值。
+
+重绘比例实验使用相同 Mask、prompt 和 seed 对比以下参数：
+
+- `padding_mask_crop=64` 与 `padding_mask_crop=None`，用于观察局部裁剪尺度的影响。
+- `strength=1.0` 与 `strength=0.8`，用于观察完全重生成和保留原图结构之间的差异。

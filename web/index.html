@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DragEdit</title>
-  <link rel="stylesheet" href="style.css?v=adaptive-viewers-5">
+  <link rel="stylesheet" href="style.css?v=pipeline-debug-6">
 </head>
 <body>
   <header class="app-header">
@@ -54,15 +54,24 @@
         </div>
         <div id="pipelineInputs" class="pipeline-inputs" hidden>
           <figure>
-            <img id="debugImageInput" alt="Pipeline image input">
+            <button class="pipeline-thumbnail" type="button" data-pipeline-input="image"
+                    aria-label="以原始分辨率查看 Pipeline image 输入">
+              <img id="debugImageInput" alt="Pipeline image input">
+            </button>
             <figcaption><code>image</code><span id="debugImageInputSize"></span></figcaption>
           </figure>
           <figure>
-            <img id="debugImageReference" alt="Pipeline image reference input">
+            <button class="pipeline-thumbnail" type="button" data-pipeline-input="image_reference"
+                    aria-label="以原始分辨率查看 Pipeline image_reference 输入">
+              <img id="debugImageReference" alt="Pipeline image reference input">
+            </button>
             <figcaption><code>image_reference</code><span id="debugImageReferenceSize"></span></figcaption>
           </figure>
           <figure>
-            <img id="debugMaskImage" alt="Pipeline mask image input">
+            <button class="pipeline-thumbnail" type="button" data-pipeline-input="mask_image"
+                    aria-label="以原始分辨率查看 Pipeline mask_image 输入">
+              <img id="debugMaskImage" alt="Pipeline mask image input">
+            </button>
             <figcaption><code>mask_image</code><span id="debugMaskImageSize"></span></figcaption>
           </figure>
         </div>
@@ -152,10 +161,31 @@
         <label><span>Seed</span><input id="generationSeed" type="number" min="0" step="1" value="0"></label>
       </div>
       <button id="generateImage" class="primary-button">生成图片</button>
+      <div id="generationProgress" class="generation-progress" hidden>
+        <progress id="generationProgressBar" max="100" value="0"></progress>
+        <div>
+          <span id="generationProgressStage">准备生成</span>
+          <output id="generationProgressValue">0%</output>
+        </div>
+      </div>
       <p id="generationHint" class="section-hint">FLUX.2 Klein 会在服务启动时加载。</p>
     </section>
   </aside>
 
-  <script type="module" src="app.js?v=adaptive-viewers-5"></script>
+  <dialog id="pipelineInputDialog" class="pipeline-input-dialog"
+          aria-labelledby="pipelineInputDialogTitle">
+    <div class="pipeline-dialog-shell">
+      <header>
+        <strong id="pipelineInputDialogTitle"></strong>
+        <span id="pipelineInputDialogSize"></span>
+        <button id="closePipelineInputDialog" type="button" aria-label="关闭原图查看">×</button>
+      </header>
+      <div class="full-image-scroll">
+        <img id="pipelineInputFullImage" alt="Pipeline 原始分辨率输入">
+      </div>
+    </div>
+  </dialog>
+
+  <script type="module" src="app.js?v=pipeline-debug-6"></script>
 </body>
 </html>

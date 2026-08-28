@@ -36,6 +36,14 @@ const generationStrength = document.querySelector("#generationStrength");
 const generationGuidance = document.querySelector("#generationGuidance");
 const generationSeed = document.querySelector("#generationSeed");
 const generationHint = document.querySelector("#generationHint");
+const generationProgress = document.querySelector("#generationProgress");
+const generationProgressBar = document.querySelector("#generationProgressBar");
+const generationProgressStage = document.querySelector("#generationProgressStage");
+const generationProgressValue = document.querySelector("#generationProgressValue");
+const pipelineInputDialog = document.querySelector("#pipelineInputDialog");
+const pipelineInputDialogTitle = document.querySelector("#pipelineInputDialogTitle");
+const pipelineInputDialogSize = document.querySelector("#pipelineInputDialogSize");
+const pipelineInputFullImage = document.querySelector("#pipelineInputFullImage");
 const debugInputViews = {
   image: {
     image: document.querySelector("#debugImageInput"),
@@ -75,6 +83,7 @@ let warpInFlight = false;
 let warpEpoch = 0;
 let currentImageFile = null;
 let comparisonPosition = 50;
+let generationProgressEpoch = 0;
 
 let painting = false;
 let lastPaintPoint = null;
@@ -171,7 +180,7 @@ async function loadImage(file) {
   statusText.textContent = "正在加载图像并进行 Python / SAM 预处理…";
   const bitmap = await createImageBitmap(file);
   ({width, height} = scaledImageSize(bitmap.width, bitmap.height));
-  stagesArea.classList.toggle("portrait-layout", height > width);
+  stagesArea.classList.toggle("portrait-layout", height < width);
 
   previewCanvas.width = overlayCanvas.width = width;
   previewCanvas.height = overlayCanvas.height = height;
@@ -208,6 +217,8 @@ async function loadImage(file) {
   comparisonEmpty.hidden = false;
   comparisonStage.hidden = true;
   pipelineInputs.hidden = true;
+  generationProgress.hidden = true;
+  if (pipelineInputDialog.open) pipelineInputDialog.close();
   layoutStage();
   setMode("paint");
   samButton.disabled = true;
@@ -620,6 +631,39 @@ function generationParameters() {
 }
 
 
+function updateGenerationProgress(percent, stage, step=0, steps=0) {
+  const value = Math.max(0, Math.min(100, Number(percent) || 0));
+  generationProgress.hidden = false;
+  generationProgressBar.value = value;
+  generationProgressValue.textContent = `${Math.round(value)}%`;
+  generationProgressStage.textContent = step > 0 && steps > 0
+    ? `${stage} · ${step}/${steps}`
+    : stage;
+}
+
+
+async function pollGenerationProgress(epoch) {
+  while (epoch === generationProgressEpoch) {
+    try {
+      const response = await fetch("/api/generation-progress", {cache: "no-store"});
+      const progress = await response.json();
+      if (epoch !== generationProgressEpoch) return;
+      if (progress.running) {
+        updateGenerationProgress(
+          progress.percent,
+          progress.stage,
+          progress.step,
+          progress.steps,
+        );
+      }
+    } catch (_) {
+      // The generation request still reports the final server error.
+    }
+    await new Promise(resolve => setTimeout(resolve, 400));
+  }
+}
+
+
 async function generateImage() {
   if (!original || !maskBounds) {
     statusText.textContent = "请先加载图像并选取 Mask。";
@@ -642,6 +686,9 @@ async function generateImage() {
   generateButton.disabled = true;
   generateButton.textContent = "正在生成…";
   statusText.textContent = "FLUX.2 Klein 正在重绘编辑区域…";
+  updateGenerationProgress(1, "正在提交生成任务");
+  const progressEpoch = ++generationProgressEpoch;
+  void pollGenerationProgress(progressEpoch);
 
   const request = generationParameters();
   if (editMode === "transform") {
@@ -672,14 +719,28 @@ async function generateImage() {
     if (!response.ok) throw new Error(result.error || "生成失败");
     await showComparison(result.image, result.pipeline_inputs);
     const seconds = (result.inference_ms / 1000).toFixed(1);
+    updateGenerationProgress(100, "生成完成");
     statusText.textContent = `生成完成 · ${result.model}`;
     performanceText.textContent = `生成 ${seconds} s`;
   } catch (error) {
+    updateGenerationProgress(generationProgressBar.value, "生成失败");
     statusText.textContent = `生成失败：${error.message}`;
   } finally {
+    generationProgressEpoch++;
     generateButton.disabled = false;
     generateButton.textContent = "生成图片";
   }
+}
+
+
+function openPipelineInput(name) {
+  const view = debugInputViews[name];
+  if (!view?.image.src) return;
+  pipelineInputDialogTitle.textContent = name;
+  pipelineInputDialogSize.textContent = view.size.textContent;
+  pipelineInputFullImage.src = view.image.src;
+  pipelineInputFullImage.alt = `${name} 原始分辨率输入`;
+  pipelineInputDialog.showModal();
 }
 
 
@@ -1117,6 +1178,15 @@ document.querySelector("#resetEdit").addEventListener("click", () => {
   schedulePreview();
 });
 generateButton.addEventListener("click", generateImage);
+document.querySelectorAll("[data-pipeline-input]").forEach(button => {
+  button.addEventListener("click", () => openPipelineInput(button.dataset.pipelineInput));
+});
+document.querySelector("#closePipelineInputDialog").addEventListener("click", () => {
+  pipelineInputDialog.close();
+});
+pipelineInputDialog.addEventListener("click", event => {
+  if (event.target === pipelineInputDialog) pipelineInputDialog.close();
+});
 
 
 warpOpacityValue.textContent = `${warpOpacity.value}%`;
