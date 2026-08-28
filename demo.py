@@ -36,6 +36,10 @@ def refine_mask(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
 
 
 class DemoHandler(SimpleHTTPRequestHandler):
+    def end_headers(self):
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        super().end_headers()
+
     def do_GET(self):
         if self.path == "/api/inpaint-mask":
             encoded = cv2.imencode(".png", LAST_SESSION.inpaint_mask * 255)[1]
@@ -262,6 +266,7 @@ def main():
         args.flux_cpu_offload,
     )
     print(f"Generation model ready on {FLUX_PROVIDER.device}")
+    print(f"Web assets: {WEB_DIR.resolve()}")
 
     handler = partial(DemoHandler, directory=WEB_DIR)
     server = ThreadingHTTPServer((args.host, args.port), handler)

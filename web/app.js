@@ -7,6 +7,7 @@ const workspace = document.querySelector("main");
 const footer = document.querySelector("footer");
 const editorViewport = document.querySelector("#editorViewport");
 const comparisonViewport = document.querySelector("#comparisonViewport");
+const stagesArea = document.querySelector("#stagesArea");
 const emptyState = document.querySelector("#emptyState");
 const comparisonEmpty = document.querySelector("#comparisonEmpty");
 const comparisonStage = document.querySelector("#comparisonStage");
@@ -170,6 +171,7 @@ async function loadImage(file) {
   statusText.textContent = "正在加载图像并进行 Python / SAM 预处理…";
   const bitmap = await createImageBitmap(file);
   ({width, height} = scaledImageSize(bitmap.width, bitmap.height));
+  stagesArea.classList.toggle("portrait-layout", height > width);
 
   previewCanvas.width = overlayCanvas.width = width;
   previewCanvas.height = overlayCanvas.height = height;
@@ -216,7 +218,6 @@ async function loadImage(file) {
       ? `SAM 预处理完成（${metadata.sam_preprocess_ms.toFixed(0)} ms），点击对象即可生成 Mask。`
       : "SAM 未配置；当前可使用画笔绘制 Mask。启动时传入 --sam-checkpoint 可启用点选对象。";
     generationHint.textContent = `${metadata.generation_model} 已加载，可使用当前编辑结果生成重绘。`;
-    generateButton.disabled = false;
     await syncMask();
     return metadata;
   });
