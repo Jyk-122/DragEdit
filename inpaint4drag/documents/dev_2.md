@@ -40,7 +40,6 @@ Mask 的白色区域由模型重新生成。把 `target_mask` 并入最终 Mask�
 | `num_inference_steps` | 4 |
 | `strength` | 1.0 |
 | `guidance_scale` | 1.0 |
-| `padding_mask_crop` | 64 |
 | `seed` | 0 |
 
 ## 3. Image reference 构造
@@ -143,15 +142,13 @@ Pipeline step 进度状态测试。
 
 ## 8. Pipeline 尺寸链路
 
-`padding_mask_crop=64` 会让 Diffusers 计算包含白色 Mask 的裁剪框，并将裁剪框扩展为与工作图
-相同的宽高比。裁剪内容会放大到工作分辨率完成 inpaint，随后缩回相同裁剪框并按 Mask 贴回
-原图。该过程保持裁剪框宽高比，同时会改变模型生成时看到的局部内容尺度。
+Provider 不设置 `padding_mask_crop`，Diffusers 使用默认值 `None`，以完整 `image` 和
+`mask_image` 坐标系执行 inpaint。`image_reference` 继续按 target mask 外接框保留 64 px
+上下文并独立裁剪；该参考条件不参与生成结果的坐标贴回。
 
 Klein Pipeline 会把超过约 100 万像素的输入先等比例缩小到约 1MP。Provider 在 Pipeline
 返回尺寸与 Demo 输入尺寸不一致时，将完整结果恢复到 Demo 输入尺寸。默认 1080 px 长边预览
 通常低于该像素阈值。
 
-重绘比例实验使用相同 Mask、prompt 和 seed 对比以下参数：
-
-- `padding_mask_crop=64` 与 `padding_mask_crop=None`，用于观察局部裁剪尺度的影响。
-- `strength=1.0` 与 `strength=0.8`，用于观察完全重生成和保留原图结构之间的差异。
+重绘结构实验可使用相同 Mask、prompt 和 seed，对比 `strength=1.0` 与 `strength=0.8`，
+观察完全重生成和保留原图结构之间的差异。

@@ -626,7 +626,6 @@ function generationParameters() {
     strength: Number(generationStrength.value),
     guidance_scale: Number(generationGuidance.value),
     seed: Number(generationSeed.value),
-    padding_mask_crop: 64,
   };
 }
 

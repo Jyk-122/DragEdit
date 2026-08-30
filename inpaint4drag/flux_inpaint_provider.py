@@ -102,7 +102,6 @@ class FluxInpaintProvider:
         num_inference_steps=4,
         guidance_scale=1.0,
         seed=0,
-        padding_mask_crop=64,
     ):
         effective_steps = max(1, int(num_inference_steps * strength))
         self.set_progress(
@@ -116,9 +115,8 @@ class FluxInpaintProvider:
         if not repair_mask.any():
             self.set_progress(running=False, percent=0, stage="重绘区域为空")
             raise ValueError("重绘区域为空，请先完成一次拖拽编辑。")
-        reference_padding = 64 if padding_mask_crop is None else padding_mask_crop
         image_reference = prepare_image_reference(
-            warped_image, source_mask, target_mask, reference_padding
+            warped_image, source_mask, target_mask
         )
         pipeline_inputs = {
             "image": Image.fromarray(image).convert("RGB"),
@@ -156,7 +154,6 @@ class FluxInpaintProvider:
                     image=pipeline_inputs["image"],
                     image_reference=pipeline_inputs["image_reference"],
                     mask_image=pipeline_inputs["mask_image"],
-                    padding_mask_crop=padding_mask_crop,
                     strength=strength,
                     num_inference_steps=num_inference_steps,
                     guidance_scale=guidance_scale,

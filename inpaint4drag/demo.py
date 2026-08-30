@@ -226,10 +226,6 @@ def generate_image(request):
         if image is None or warped_image is None:
             raise ValueError("请先加载图像并完成一次拖拽编辑。")
 
-    padding_mask_crop = request.get("padding_mask_crop", 64)
-    if padding_mask_crop is not None:
-        padding_mask_crop = int(padding_mask_crop)
-
     return FLUX_PROVIDER.generate(
         image=image,
         warped_image=warped_image,
@@ -241,7 +237,6 @@ def generate_image(request):
         num_inference_steps=int(request.get("num_inference_steps", 4)),
         guidance_scale=float(request.get("guidance_scale", 1.0)),
         seed=int(request.get("seed", 0)),
-        padding_mask_crop=padding_mask_crop,
     )
 
 
