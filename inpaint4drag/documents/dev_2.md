@@ -1,6 +1,6 @@
-# DragEdit FLUX.2 Klein 生成重绘记录 - Dev_2
+# DragEdit 生成重绘记录 - Dev_2
 
-更新时间：2026-08-28
+更新时间：2026-08-31
 
 本文记录 Warp 交互结果接入 FLUX.2 Klein 局部重绘后的数据流、界面和运行参数。
 后续开发应先阅读根目录 `AGENTS.md`、`documents/dev_0.md` 和 `documents/dev_1.md`。
@@ -11,38 +11,34 @@ Demo 现在包含三个连续阶段：
 
 1. 选择图像和对象 Mask。
 2. 通过整体变换或 point pairs 得到 Warp 编辑结果。
-3. 使用 `Flux2KleinInpaintPipeline` 对目标对象、空洞和融合带统一重绘。
+3. 使用可切换的 Inpaint Provider 完成空洞和融合带重绘。
 
-默认模型为 `black-forest-labs/FLUX.2-klein-4B`。`demo.py` 在创建 HTTP 服务前加载
-模型，使页面可访问时生成管线已经就绪。
+默认 Provider 为 SD1.5 Inpainting + LCM LoRA + Tiny VAE；FLUX.2 Klein 保留为可选实验
+Provider。`demo.py` 在创建 HTTP 服务前加载所选模型，使页面可访问时生成管线已经就绪。
 
 ## 2. 生成模型输入
 
-`flux_inpaint_provider.py` 负责 Diffusers 推理，核心输入语义如下：
+`sd15_inpaint_provider.py` 使用 Inpaint4Drag 原始输入语义：
 
 ```text
-image           = 原图
-image_reference = 局部干净 Warp 结果
-mask_image      = inpaint_mask OR target_mask
+image      = 干净 Warp 合成图
+mask_image = inpaint_mask
 ```
 
-Mask 的白色区域由模型重新生成。把 `target_mask` 并入最终 Mask，能够让模型重绘完整
-变形对象，而不只是填补 source hole 和 target contour band；`image_reference` 则向模型
-提供目标形变、位移、缩放和旋转布局。
+Pipeline 结果按全分辨率二值 Mask 与 Warp 图合成，Mask 外像素保持不变。SD1.5 默认使用
+空提示词，并缓存空提示词 embedding。`flux_inpaint_provider.py` 继续提供原图、局部 Warp
+参考图和 `inpaint_mask | target_mask` 的参考条件重绘实验。
 
-默认提示词要求遵循参考图的目标布局和对象身份，同时修复 Warp 导致的拉伸、模糊、
-撕裂、空洞、接缝、重复内容和不合理结构，并保持外围图像自然衔接。
-
-默认推理参数：
+SD1.5 默认推理参数：
 
 | 参数 | 默认值 |
 |---|---:|
-| `num_inference_steps` | 4 |
+| `num_inference_steps` | 8 |
 | `strength` | 1.0 |
 | `guidance_scale` | 1.0 |
 | `seed` | 0 |
 
-## 3. Image reference 构造
+## 3. FLUX Image reference 构造
 
 棋盘格只属于交互预览，不进入生成模型。
 
@@ -70,15 +66,15 @@ Mask 的白色区域由模型重新生成。把 `target_mask` 并入最终 Mask�
 重算当前 Warp，再直接读取 `image`、`warped_image`、`inpaint_mask`、`target_mask` 和
 `source_mask`，保证生成输入对应按钮点击时的编辑状态。
 
-接口返回生成 PNG Data URL、模型名、推理耗时，以及实际传给 Pipeline 的 `image`、
-`image_reference`、`mask_image` 三张 PNG 调试图和各自尺寸。
+接口返回生成 PNG Data URL、模型名、推理耗时，以及实际传给所选 Pipeline 的 PNG 调试图
+和各自尺寸。SD1.5 返回 `image` 与 `mask_image`；FLUX 返回 `image`、`image_reference` 与
+`mask_image`。
 
 ### `GET /api/generation-progress`
 
 返回当前生成任务的阶段、百分比、已完成 step 和总 step。Provider 通过
 `callback_on_step_end` 在每个实际去噪 step 后更新状态；前端生成期间每 400 ms 轮询一次。
-图像准备、条件编码、去噪和结果整理分别显示阶段信息。4-step 蒸馏模型的去噪区间会按
-实际 step 分段推进。
+图像准备、条件编码、去噪和结果整理分别显示阶段信息，去噪区间按实际 step 分段推进。
 
 ## 5. 页面布局
 
@@ -97,9 +93,8 @@ Mask 的白色区域由模型重新生成。把 `target_mask` 并入最终 Mask�
 对比台以生成图为底层，原图覆盖左侧区域。竖线向右拖动会显示更多原图，向左拖动会
 显示更多生成图。
 
-生成完成后，对比台下方显示 `image`、`image_reference` 和 `mask_image` 三张缩略图。
-这些图直接由 Provider 调用 Pipeline 时使用的 PIL 对象编码，便于核对局部参考图裁剪、
-最终白色重绘区域和原图输入。
+生成完成后，对比台下方显示所选 Provider 实际传入 Pipeline 的输入缩略图。这些图直接由
+Provider 使用的 PIL 对象编码，便于核对 Warp 图、白色重绘区域和可选参考图。
 
 三个缩略图均可点击并在模态查看器中按图像原始像素尺寸显示；大于视口的图像使用滚动区域
 查看。查看器支持关闭按钮、Esc 和点击背景关闭。
@@ -109,42 +104,50 @@ Mask 的白色区域由模型重新生成。把 `target_mask` 并入最终 Mask�
 
 ## 6. 依赖与启动参数
 
-`requirements.txt` 使用 Diffusers GitHub 主分支，以包含
-`Flux2KleinInpaintPipeline`，并加入 Transformers、Accelerate、Safetensors 和
-SentencePiece。
+`requirements.txt` 使用 Diffusers GitHub 主分支，包含 `AutoPipelineForInpainting`、
+`Flux2KleinInpaintPipeline`、Transformers、Accelerate、Safetensors 和 SentencePiece。
 
 相关启动参数：
 
 ```text
+--inpaint-provider
+--sd15-model
+--sd15-lora
+--sd15-vae
+--sd15-device
+--sd15-cache-dir
+--sd15-cpu-offload
 --flux-model
 --flux-device
 --flux-cache-dir
 --flux-cpu-offload
 ```
 
-Demo 默认使用 CUDA。CUDA 优先采用 bfloat16，不支持时使用 float16；显式选择 CPU 时
-使用 float32。
+SD1.5 CUDA 使用 float16，FLUX CUDA 优先使用 bfloat16；显式选择 CPU 时使用 float32。
 
 ## 7. 验证
 
 当前静态与算法验证命令：
 
 ```powershell
-D:\anaconda3\envs\pytorch-cpu\python.exe -m unittest discover -s tests -v
-D:\anaconda3\envs\pytorch-cpu\python.exe -m py_compile demo.py baseline_warp.py my_warp.py sam_provider.py flux_inpaint_provider.py
-node --check web/app.js
+$env:PYTHONPATH = ".;.\inpaint4drag"
+D:\anaconda3\envs\pytorch-cpu\python.exe -m unittest discover -s inpaint4drag\tests -v
+D:\anaconda3\envs\pytorch-cpu\python.exe -m py_compile inpaint4drag\demo.py inpaint4drag\baseline_warp.py inpaint4drag\my_warp.py inpaint4drag\sam_provider.py inpaint4drag\sd15_inpaint_provider.py inpaint4drag\flux_inpaint_provider.py
+node --check inpaint4drag\web\app.js
 git diff --check
 ```
 
-测试集共 13 项，包含既有 Warp 回归，以及生成请求重算、最终 Mask 合并、局部参考图裁剪和
-Pipeline step 进度状态测试。
-模型权重加载与 GPU 推理在安装 Diffusers 主分支和 FLUX.2 Klein 权重的目标环境执行。
+测试集共 14 项，包含既有 Warp 回归、生成请求重算、SD1.5 Warp/Mask 输入语义、最终 Mask
+合并、局部参考图裁剪和 Pipeline step 进度状态测试。
+模型权重加载与 GPU 推理在安装 Diffusers 主分支和对应 Provider 权重的目标环境执行。
 
 ## 8. Pipeline 尺寸链路
 
-Provider 不设置 `padding_mask_crop`，Diffusers 使用默认值 `None`，以完整 `image` 和
-`mask_image` 坐标系执行 inpaint。`image_reference` 继续按 target mask 外接框保留 64 px
-上下文并独立裁剪；该参考条件不参与生成结果的坐标贴回。
+SD1.5 Provider 将输入宽高调整为最接近的 8 的倍数，并对 Mask 使用最近邻缩放。生成结果
+恢复至 Demo 输入尺寸后，使用原始全分辨率 `inpaint_mask` 合成。
+
+FLUX Provider 不设置 `padding_mask_crop`，以完整 `image` 和 `mask_image` 坐标系执行
+inpaint。`image_reference` 按 target mask 外接框保留 64 px 上下文并独立裁剪。
 
 Klein Pipeline 会把超过约 100 万像素的输入先等比例缩小到约 1MP。Provider 在 Pipeline
 返回尺寸与 Demo 输入尺寸不一致时，将完整结果恢复到 Demo 输入尺寸。默认 1080 px 长边预览

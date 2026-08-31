@@ -5,26 +5,33 @@ Drag-based Image Editing 的交互、Warp 与生成重绘实验 Demo。
 ## 安装与启动
 
 ```powershell
-pip install -r requirements.txt
-python demo.py
+$env:PYTHONPATH = ".;.\inpaint4drag"
+pip install -r .\inpaint4drag\requirements.txt
+python .\inpaint4drag\demo.py
 ```
 
-服务会先加载默认生成模型 `black-forest-labs/FLUX.2-klein-4B`，随后在
+服务会先加载默认生成模型 `sd-legacy/stable-diffusion-inpainting`、LCM LoRA 和 Tiny VAE，随后在
 `http://127.0.0.1:7860` 打开页面。首次启动时 Hugging Face 会下载模型权重。
 
 常用启动参数：
 
 ```powershell
-python demo.py `
-  --flux-model black-forest-labs/FLUX.2-klein-4B `
-  --flux-device cuda `
-  --flux-cache-dir D:\models\huggingface
+python .\inpaint4drag\demo.py `
+  --inpaint-provider sd15 `
+  --sd15-device cuda `
+  --sd15-cache-dir D:\models\huggingface
 ```
 
-显存需要由 CPU 分担时可以增加 `--flux-cpu-offload`。服务部署在远程机器时可以使用：
+显存需要由 CPU 分担时可以增加 `--sd15-cpu-offload`。服务部署在远程机器时可以使用：
 
 ```powershell
-python demo.py --host 0.0.0.0 --no-browser --flux-device cuda
+python .\inpaint4drag\demo.py --host 0.0.0.0 --no-browser --sd15-device cuda
+```
+
+FLUX.2 Klein 实验路径仍可通过以下参数启动：
+
+```powershell
+python .\inpaint4drag\demo.py --inpaint-provider flux --flux-device cuda
 ```
 
 ## 工作流
@@ -38,14 +45,16 @@ python demo.py --host 0.0.0.0 --no-browser --flux-device cuda
 
 1. 加载图像，并通过画笔、橡皮或 SAM 选择对象 Mask。
 2. 使用二维整体变换，或使用 point pairs 完成二维非刚性形变。
-3. 调整提示词和生成参数，点击“生成图片”运行 FLUX.2 Klein 局部重绘。
+3. 调整生成参数，点击“生成图片”运行局部重绘。
 
-最终重绘使用 Diffusers `Flux2KleinInpaintPipeline`。其中：
+默认重绘使用 Diffusers `AutoPipelineForInpainting`，配置与 Inpaint4Drag 一致：
 
-- `image` 是原图。
-- `image_reference` 是不含棋盘格的局部 warp 结果。
-- `mask_image` 是 `inpaint_mask | target_mask`，白色区域由模型重新生成。
-- 默认参数是 4 steps、strength 1.0、guidance 1.0、padding 64。
+- 模型为 `sd-legacy/stable-diffusion-inpainting`。
+- Scheduler 使用 `LCMScheduler`，并融合 `latent-consistency/lcm-lora-sdv1-5`。
+- VAE 使用 `madebyollin/taesd`。
+- `image` 是干净的 Warp 合成图，`mask_image` 是原始 `inpaint_mask`。
+- 默认使用空提示词、8 steps、strength 1.0 和 guidance 1.0。
+- Pipeline 返回后按全分辨率二值 Mask 与 Warp 图合成，保持 Mask 外像素不变。
 
 `baseline_warp.py` 继续直接调用 Inpaint4Drag 的原始 `bi_warp`；`my_warp.py`
 保留独立实验实现。两条非刚性路径都会在 Session 中保存干净 warp 合成图，供生成阶段使用。

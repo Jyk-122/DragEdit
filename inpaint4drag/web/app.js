@@ -84,6 +84,7 @@ let warpEpoch = 0;
 let currentImageFile = null;
 let comparisonPosition = 50;
 let generationProgressEpoch = 0;
+let generationDefaultsApplied = false;
 
 let painting = false;
 let lastPaintPoint = null;
@@ -229,6 +230,14 @@ async function loadImage(file) {
       ? `SAM 预处理完成（${metadata.sam_preprocess_ms.toFixed(0)} ms），点击对象即可生成 Mask。`
       : "SAM 未配置；当前可使用画笔绘制 Mask。启动时传入 --sam-checkpoint 可启用点选对象。";
     generationHint.textContent = `${metadata.generation_model} 已加载，可使用当前编辑结果生成重绘。`;
+    if (!generationDefaultsApplied) {
+      const defaults = metadata.generation_defaults;
+      generationPrompt.value = defaults.prompt;
+      generationSteps.value = defaults.num_inference_steps;
+      generationStrength.value = defaults.strength;
+      generationGuidance.value = defaults.guidance_scale;
+      generationDefaultsApplied = true;
+    }
     await syncMask();
     return metadata;
   });
@@ -684,7 +693,7 @@ async function generateImage() {
   await pythonReady;
   generateButton.disabled = true;
   generateButton.textContent = "正在生成…";
-  statusText.textContent = "FLUX.2 Klein 正在重绘编辑区域…";
+  statusText.textContent = "生成模型正在重绘编辑区域…";
   updateGenerationProgress(1, "正在提交生成任务");
   const progressEpoch = ++generationProgressEpoch;
   void pollGenerationProgress(progressEpoch);
@@ -752,8 +761,16 @@ async function showComparison(dataUrl, inputs) {
   comparisonEmpty.hidden = true;
   comparisonStage.hidden = false;
   for (const [name, view] of Object.entries(debugInputViews)) {
-    view.image.src = inputs[name].image;
-    view.size.textContent = `${inputs[name].width}×${inputs[name].height}`;
+    const input = inputs[name];
+    const figure = view.image.closest("figure");
+    figure.hidden = !input;
+    if (!input) {
+      view.image.removeAttribute("src");
+      view.size.textContent = "";
+      continue;
+    }
+    view.image.src = input.image;
+    view.size.textContent = `${input.width}×${input.height}`;
   }
   pipelineInputs.hidden = false;
   setComparisonPosition(50);

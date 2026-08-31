@@ -14,9 +14,10 @@ import numpy as np
 from PIL import Image
 
 from baseline_warp import BaselineWarpSession
-from flux_inpaint_provider import DEFAULT_PROMPT, FluxInpaintProvider
+from flux_inpaint_provider import FluxInpaintProvider
 from my_warp import MyWarpSession
 from sam_provider import SamMaskProvider
+from sd15_inpaint_provider import Sd15InpaintProvider
 
 
 ROOT = Path(__file__).parent
@@ -27,7 +28,7 @@ WARP_SESSIONS = {
 }
 LAST_SESSION = WARP_SESSIONS["baseline"]
 SAM_PROVIDER = SamMaskProvider()
-FLUX_PROVIDER = None
+INPAINT_PROVIDER = None
 
 
 def refine_mask(image: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -46,7 +47,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
             self.send_bytes(encoded.tobytes(), "image/png")
             return
         if self.path == "/api/generation-progress":
-            self.send_json(FLUX_PROVIDER.get_progress())
+            self.send_json(INPAINT_PROVIDER.get_progress())
             return
         super().do_GET()
 
@@ -63,7 +64,15 @@ class DemoHandler(SimpleHTTPRequestHandler):
                 "height": image.shape[0],
                 "sam_ready": SAM_PROVIDER.enabled,
                 "sam_preprocess_ms": (time.perf_counter() - started) * 1000,
-                "generation_model": FLUX_PROVIDER.model_id,
+                "generation_model": INPAINT_PROVIDER.model_id,
+                "generation_defaults": {
+                    "prompt": INPAINT_PROVIDER.default_prompt,
+                    "num_inference_steps": (
+                        INPAINT_PROVIDER.default_num_inference_steps
+                    ),
+                    "strength": INPAINT_PROVIDER.default_strength,
+                    "guidance_scale": INPAINT_PROVIDER.default_guidance_scale,
+                },
             })
             return
 
@@ -132,7 +141,7 @@ class DemoHandler(SimpleHTTPRequestHandler):
                     "image": "data:image/png;base64," +
                              base64.b64encode(encoded).decode(),
                     "inference_ms": inference_ms,
-                    "model": FLUX_PROVIDER.model_id,
+                    "model": INPAINT_PROVIDER.model_id,
                     "pipeline_inputs": {
                         name: encode_pil_debug_image(image)
                         for name, image in pipeline_inputs.items()
@@ -195,7 +204,7 @@ def compose_ghost_preview(image, warped, target_mask, inpaint_mask, opacity):
 
 
 def generate_image(request):
-    """Resolve browser/server warp inputs and run FLUX.2 Klein inpainting."""
+    """Resolve browser/server warp inputs and run the selected inpaint provider."""
     if "image_reference" in request:
         image = decode_data_url(request["image"], "RGB")
         warped_image = decode_data_url(request["image_reference"], "RGB")
@@ -226,22 +235,29 @@ def generate_image(request):
         if image is None or warped_image is None:
             raise ValueError("请先加载图像并完成一次拖拽编辑。")
 
-    return FLUX_PROVIDER.generate(
+    prompt = request.get("prompt") or INPAINT_PROVIDER.default_prompt
+    return INPAINT_PROVIDER.generate(
         image=image,
         warped_image=warped_image,
         inpaint_mask=inpaint_mask,
         target_mask=target_mask,
         source_mask=source_mask,
-        prompt=request.get("prompt") or DEFAULT_PROMPT,
-        strength=float(request.get("strength", 1.0)),
-        num_inference_steps=int(request.get("num_inference_steps", 4)),
-        guidance_scale=float(request.get("guidance_scale", 1.0)),
+        prompt=prompt,
+        strength=float(request.get(
+            "strength", INPAINT_PROVIDER.default_strength
+        )),
+        num_inference_steps=int(request.get(
+            "num_inference_steps", INPAINT_PROVIDER.default_num_inference_steps
+        )),
+        guidance_scale=float(request.get(
+            "guidance_scale", INPAINT_PROVIDER.default_guidance_scale
+        )),
         seed=int(request.get("seed", 0)),
     )
 
 
 def main():
-    global SAM_PROVIDER, FLUX_PROVIDER
+    global SAM_PROVIDER, INPAINT_PROVIDER
     parser = argparse.ArgumentParser(description="DragEdit local interaction demo")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=7860)
@@ -249,6 +265,19 @@ def main():
     parser.add_argument("--sam-checkpoint")
     parser.add_argument("--sam-model-type", default="vit_b")
     parser.add_argument("--sam-device", default="cuda")
+    parser.add_argument(
+        "--inpaint-provider", choices=("sd15", "flux"), default="sd15"
+    )
+    parser.add_argument(
+        "--sd15-model", default="sd-legacy/stable-diffusion-inpainting"
+    )
+    parser.add_argument(
+        "--sd15-lora", default="latent-consistency/lcm-lora-sdv1-5"
+    )
+    parser.add_argument("--sd15-vae", default="madebyollin/taesd")
+    parser.add_argument("--sd15-device", default="cuda")
+    parser.add_argument("--sd15-cache-dir")
+    parser.add_argument("--sd15-cpu-offload", action="store_true")
     parser.add_argument(
         "--flux-model", default="black-forest-labs/FLUX.2-klein-4B"
     )
@@ -260,14 +289,28 @@ def main():
     SAM_PROVIDER = SamMaskProvider(
         args.sam_checkpoint, args.sam_model_type, args.sam_device
     )
-    print(f"Loading generation model: {args.flux_model}")
-    FLUX_PROVIDER = FluxInpaintProvider(
-        args.flux_model,
-        args.flux_device,
-        args.flux_cache_dir,
-        args.flux_cpu_offload,
+    selected_model = (
+        args.sd15_model if args.inpaint_provider == "sd15" else args.flux_model
     )
-    print(f"Generation model ready on {FLUX_PROVIDER.device}")
+    print(f"Loading generation model: {selected_model}")
+    if args.inpaint_provider == "sd15":
+        INPAINT_PROVIDER = Sd15InpaintProvider(
+            args.sd15_model,
+            args.sd15_lora,
+            args.sd15_vae,
+            args.sd15_device,
+            args.sd15_cache_dir,
+            args.sd15_cpu_offload,
+        )
+    else:
+        INPAINT_PROVIDER = FluxInpaintProvider(
+            args.flux_model,
+            args.flux_device,
+            args.flux_cache_dir,
+            args.flux_cpu_offload,
+        )
+    print(f"Generation model ready: {INPAINT_PROVIDER.model_id}")
+    print(f"Generation device: {INPAINT_PROVIDER.device}")
     print(f"Web assets: {WEB_DIR.resolve()}")
 
     handler = partial(DemoHandler, directory=WEB_DIR)

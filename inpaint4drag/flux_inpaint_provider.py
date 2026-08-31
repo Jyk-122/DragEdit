@@ -43,6 +43,11 @@ def prepare_image_reference(warped_image, source_mask, target_mask, padding=64):
 
 
 class FluxInpaintProvider:
+    default_prompt = DEFAULT_PROMPT
+    default_num_inference_steps = 4
+    default_strength = 1.0
+    default_guidance_scale = 1.0
+
     def __init__(
         self,
         model_id="black-forest-labs/FLUX.2-klein-4B",

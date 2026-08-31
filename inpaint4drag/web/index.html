@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>DragEdit</title>
-  <link rel="stylesheet" href="style.css?v=pipeline-debug-6">
+  <link rel="stylesheet" href="style.css?v=inpaint-provider-7">
 </head>
 <body>
   <header class="app-header">
@@ -152,10 +152,10 @@
       <h2><span>3</span> 生成重绘</h2>
       <label class="prompt-row">
         <span>提示词</span>
-        <textarea id="generationPrompt" rows="4">Use the image reference as the exact target layout. Re-render the edited region so that the result follows the local deformation, displacement, scale, and rotation shown in the reference image. Preserve the object's identity and intended geometry while repairing warp-induced stretching, blur, tearing, holes, seams, duplicated content, and other implausible regions. Keep the surrounding image unchanged and blend the repaired region naturally with the background.</textarea>
+        <textarea id="generationPrompt" rows="4" placeholder="SD1.5 Inpainting 默认使用空提示词"></textarea>
       </label>
       <div class="generation-parameters">
-        <label><span>Steps</span><input id="generationSteps" type="number" min="1" max="50" value="4"></label>
+        <label><span>Steps</span><input id="generationSteps" type="number" min="1" max="50" value="8"></label>
         <label><span>Strength</span><input id="generationStrength" type="number" min="0" max="1" step="0.05" value="1"></label>
         <label><span>Guidance</span><input id="generationGuidance" type="number" min="0" max="20" step="0.1" value="1"></label>
         <label><span>Seed</span><input id="generationSeed" type="number" min="0" step="1" value="0"></label>
@@ -168,7 +168,7 @@
           <output id="generationProgressValue">0%</output>
         </div>
       </div>
-      <p id="generationHint" class="section-hint">FLUX.2 Klein 会在服务启动时加载。</p>
+      <p id="generationHint" class="section-hint">生成模型会在服务启动时加载。</p>
     </section>
   </aside>
 
@@ -186,6 +186,6 @@
     </div>
   </dialog>
 
-  <script type="module" src="app.js?v=pipeline-debug-6"></script>
+  <script type="module" src="app.js?v=inpaint-provider-7"></script>
 </body>
 </html>
