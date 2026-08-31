@@ -49,10 +49,6 @@ const debugInputViews = {
     image: document.querySelector("#debugImageInput"),
     size: document.querySelector("#debugImageInputSize"),
   },
-  image_reference: {
-    image: document.querySelector("#debugImageReference"),
-    size: document.querySelector("#debugImageReferenceSize"),
-  },
   mask_image: {
     image: document.querySelector("#debugMaskImage"),
     size: document.querySelector("#debugMaskImageSize"),
@@ -703,7 +699,7 @@ async function generateImage() {
     renderTransformPreview();
     const inpaint = buildTransformInpaintMask();
     request.image = sourceCanvas.toDataURL("image/png");
-    request.image_reference = transformReferenceCanvas.toDataURL("image/png");
+    request.warped_image = transformReferenceCanvas.toDataURL("image/png");
     request.inpaint_mask = maskDataUrl(inpaint);
     request.target_mask = maskDataUrl(transformMaskBuffers.target);
     request.source_mask = maskCanvas.toDataURL("image/png");

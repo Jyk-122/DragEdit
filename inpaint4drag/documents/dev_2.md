@@ -2,7 +2,7 @@
 
 更新时间：2026-08-31
 
-本文记录 Warp 交互结果接入 FLUX.2 Klein 局部重绘后的数据流、界面和运行参数。
+本文记录 Warp 交互结果接入 Inpaint Provider 后的数据流、界面和运行参数。
 后续开发应先阅读根目录 `AGENTS.md`、`documents/dev_0.md` 和 `documents/dev_1.md`。
 
 ## 1. 当前完整链路
@@ -18,16 +18,15 @@ Provider。`demo.py` 在创建 HTTP 服务前加载所选模型，使页面可�
 
 ## 2. 生成模型输入
 
-`sd15_inpaint_provider.py` 使用 Inpaint4Drag 原始输入语义：
+SD1.5 和 FLUX Provider 使用相同的 Inpaint4Drag 输入语义：
 
 ```text
 image      = 干净 Warp 合成图
 mask_image = inpaint_mask
 ```
 
-Pipeline 结果按全分辨率二值 Mask 与 Warp 图合成，Mask 外像素保持不变。SD1.5 默认使用
-空提示词，并缓存空提示词 embedding。`flux_inpaint_provider.py` 继续提供原图、局部 Warp
-参考图和 `inpaint_mask | target_mask` 的参考条件重绘实验。
+Pipeline 结果按全分辨率二值 Mask 与 Warp 图合成，Mask 外像素保持不变。两个 Provider
+默认使用空提示词；SD1.5 会缓存空提示词 embedding。
 
 SD1.5 默认推理参数：
 
@@ -38,7 +37,7 @@ SD1.5 默认推理参数：
 | `guidance_scale` | 1.0 |
 | `seed` | 0 |
 
-## 3. FLUX Image reference 构造
+## 3. Warp 图构造
 
 棋盘格只属于交互预览，不进入生成模型。
 
@@ -46,9 +45,8 @@ SD1.5 默认推理参数：
   合成后的干净图像；公开 `warp_preview()` 返回结构保持不变。
 - 浏览器整体变换使用独立 `transformReferenceCanvas` 保存应用位移、旋转和缩放后的
   干净合成图，再复制一份用于叠加棋盘格预览。
-- 生成前使用 OpenCV Telea 对 `source_mask & ~target_mask` 做参考图占位修补，并重新覆盖
-  target object，避免 source object 残留干扰参考条件。
-- 最终 `image_reference` 按 target mask 外接框和 64 px padding 裁成局部参考图。
+- 两个 Provider 都直接使用干净 Warp 合成图作为 `image`，使用原始 `inpaint_mask` 作为
+  `mask_image`。
 
 ## 4. HTTP 接口
 
@@ -57,7 +55,7 @@ SD1.5 默认推理参数：
 整体变换由浏览器提交：
 
 - `image`
-- `image_reference`
+- `warped_image`
 - `inpaint_mask`
 - `target_mask`
 - `source_mask`
@@ -67,8 +65,7 @@ SD1.5 默认推理参数：
 `source_mask`，保证生成输入对应按钮点击时的编辑状态。
 
 接口返回生成 PNG Data URL、模型名、推理耗时，以及实际传给所选 Pipeline 的 PNG 调试图
-和各自尺寸。SD1.5 返回 `image` 与 `mask_image`；FLUX 返回 `image`、`image_reference` 与
-`mask_image`。
+和各自尺寸。两个 Provider 均返回 `image` 与 `mask_image`。
 
 ### `GET /api/generation-progress`
 
@@ -94,9 +91,9 @@ SD1.5 默认推理参数：
 显示更多生成图。
 
 生成完成后，对比台下方显示所选 Provider 实际传入 Pipeline 的输入缩略图。这些图直接由
-Provider 使用的 PIL 对象编码，便于核对 Warp 图、白色重绘区域和可选参考图。
+Provider 使用的 PIL 对象编码，便于核对 Warp 图和白色重绘区域。
 
-三个缩略图均可点击并在模态查看器中按图像原始像素尺寸显示；大于视口的图像使用滚动区域
+两个缩略图均可点击并在模态查看器中按图像原始像素尺寸显示；大于视口的图像使用滚动区域
 查看。查看器支持关闭按钮、Esc 和点击背景关闭。
 
 生成操作台显示实际 Pipeline 进度条、当前阶段、百分比和去噪 step。生成完成后保留 100%
@@ -137,8 +134,8 @@ node --check inpaint4drag\web\app.js
 git diff --check
 ```
 
-测试集共 14 项，包含既有 Warp 回归、生成请求重算、SD1.5 Warp/Mask 输入语义、最终 Mask
-合并、局部参考图裁剪和 Pipeline step 进度状态测试。
+测试集包含既有 Warp 回归、生成请求重算、两个 Provider 的 Warp/Mask 输入语义、最终 Mask
+合并和 Pipeline step 进度状态测试。
 模型权重加载与 GPU 推理在安装 Diffusers 主分支和对应 Provider 权重的目标环境执行。
 
 ## 8. Pipeline 尺寸链路
@@ -146,8 +143,8 @@ git diff --check
 SD1.5 Provider 将输入宽高调整为最接近的 8 的倍数，并对 Mask 使用最近邻缩放。生成结果
 恢复至 Demo 输入尺寸后，使用原始全分辨率 `inpaint_mask` 合成。
 
-FLUX Provider 不设置 `padding_mask_crop`，以完整 `image` 和 `mask_image` 坐标系执行
-inpaint。`image_reference` 按 target mask 外接框保留 64 px 上下文并独立裁剪。
+FLUX Provider 不设置 `padding_mask_crop`，以完整 Warp `image` 和原始 `mask_image` 坐标系
+执行 inpaint。
 
 Klein Pipeline 会把超过约 100 万像素的输入先等比例缩小到约 1MP。Provider 在 Pipeline
 返回尺寸与 Demo 输入尺寸不一致时，将完整结果恢复到 Demo 输入尺寸。默认 1080 px 长边预览

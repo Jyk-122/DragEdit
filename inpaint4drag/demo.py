@@ -205,9 +205,9 @@ def compose_ghost_preview(image, warped, target_mask, inpaint_mask, opacity):
 
 def generate_image(request):
     """Resolve browser/server warp inputs and run the selected inpaint provider."""
-    if "image_reference" in request:
+    if "warped_image" in request:
         image = decode_data_url(request["image"], "RGB")
-        warped_image = decode_data_url(request["image_reference"], "RGB")
+        warped_image = decode_data_url(request["warped_image"], "RGB")
         inpaint_mask = decode_data_url(request["inpaint_mask"], "L")
         target_mask = decode_data_url(request["target_mask"], "L")
         source_mask = decode_data_url(request["source_mask"], "L")
