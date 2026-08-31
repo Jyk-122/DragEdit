@@ -33,6 +33,14 @@ FLUX.2 Klein 实验路径仍可通过以下参数启动：
 python .\inpaint4drag\demo.py --inpaint-provider flux --flux-device cuda
 ```
 
+Z-Image-Turbo Inpainting 可通过以下参数启动：
+
+```powershell
+python .\inpaint4drag\demo.py --inpaint-provider zimage --zimage-device cuda
+```
+
+Z-Image 默认使用 `Tongyi-MAI/Z-Image-Turbo`、8 steps、strength 1.0 和 guidance 0.0。
+
 ## 工作流
 
 页面上方包含两个展示台：

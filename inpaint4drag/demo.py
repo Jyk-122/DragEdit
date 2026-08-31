@@ -18,6 +18,7 @@ from flux_inpaint_provider import FluxInpaintProvider
 from my_warp import MyWarpSession
 from sam_provider import SamMaskProvider
 from sd15_inpaint_provider import Sd15InpaintProvider
+from zimage_inpaint_provider import ZImageInpaintProvider
 
 
 ROOT = Path(__file__).parent
@@ -266,7 +267,7 @@ def main():
     parser.add_argument("--sam-model-type", default="vit_b")
     parser.add_argument("--sam-device", default="cuda")
     parser.add_argument(
-        "--inpaint-provider", choices=("sd15", "flux"), default="sd15"
+        "--inpaint-provider", choices=("sd15", "flux", "zimage"), default="sd15"
     )
     parser.add_argument(
         "--sd15-model", default="sd-legacy/stable-diffusion-inpainting"
@@ -284,14 +285,20 @@ def main():
     parser.add_argument("--flux-device", default="cuda")
     parser.add_argument("--flux-cache-dir")
     parser.add_argument("--flux-cpu-offload", action="store_true")
+    parser.add_argument("--zimage-model", default="Tongyi-MAI/Z-Image-Turbo")
+    parser.add_argument("--zimage-device", default="cuda")
+    parser.add_argument("--zimage-cache-dir")
+    parser.add_argument("--zimage-cpu-offload", action="store_true")
     args = parser.parse_args()
 
     SAM_PROVIDER = SamMaskProvider(
         args.sam_checkpoint, args.sam_model_type, args.sam_device
     )
-    selected_model = (
-        args.sd15_model if args.inpaint_provider == "sd15" else args.flux_model
-    )
+    selected_model = {
+        "sd15": args.sd15_model,
+        "flux": args.flux_model,
+        "zimage": args.zimage_model,
+    }[args.inpaint_provider]
     print(f"Loading generation model: {selected_model}")
     if args.inpaint_provider == "sd15":
         INPAINT_PROVIDER = Sd15InpaintProvider(
@@ -302,12 +309,19 @@ def main():
             args.sd15_cache_dir,
             args.sd15_cpu_offload,
         )
-    else:
+    elif args.inpaint_provider == "flux":
         INPAINT_PROVIDER = FluxInpaintProvider(
             args.flux_model,
             args.flux_device,
             args.flux_cache_dir,
             args.flux_cpu_offload,
+        )
+    else:
+        INPAINT_PROVIDER = ZImageInpaintProvider(
+            args.zimage_model,
+            args.zimage_device,
+            args.zimage_cache_dir,
+            args.zimage_cpu_offload,
         )
     print(f"Generation model ready: {INPAINT_PROVIDER.model_id}")
     print(f"Generation device: {INPAINT_PROVIDER.device}")

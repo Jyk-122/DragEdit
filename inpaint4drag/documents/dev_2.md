@@ -13,19 +13,20 @@ Demo 现在包含三个连续阶段：
 2. 通过整体变换或 point pairs 得到 Warp 编辑结果。
 3. 使用可切换的 Inpaint Provider 完成空洞和融合带重绘。
 
-默认 Provider 为 SD1.5 Inpainting + LCM LoRA + Tiny VAE；FLUX.2 Klein 保留为可选实验
-Provider。`demo.py` 在创建 HTTP 服务前加载所选模型，使页面可访问时生成管线已经就绪。
+默认 Provider 为 SD1.5 Inpainting + LCM LoRA + Tiny VAE；FLUX.2 Klein 与 Z-Image-Turbo
+作为可选 Provider。`demo.py` 在创建 HTTP 服务前加载所选模型，使页面可访问时生成管线
+已经就绪。
 
 ## 2. 生成模型输入
 
-SD1.5 和 FLUX Provider 使用相同的 Inpaint4Drag 输入语义：
+SD1.5、FLUX 和 Z-Image Provider 使用相同的 Inpaint4Drag 输入语义：
 
 ```text
 image      = 干净 Warp 合成图
 mask_image = inpaint_mask
 ```
 
-Pipeline 结果按全分辨率二值 Mask 与 Warp 图合成，Mask 外像素保持不变。两个 Provider
+Pipeline 结果按全分辨率二值 Mask 与 Warp 图合成，Mask 外像素保持不变。三个 Provider
 默认使用空提示词；SD1.5 会缓存空提示词 embedding。
 
 SD1.5 默认推理参数：
@@ -45,7 +46,7 @@ SD1.5 默认推理参数：
   合成后的干净图像；公开 `warp_preview()` 返回结构保持不变。
 - 浏览器整体变换使用独立 `transformReferenceCanvas` 保存应用位移、旋转和缩放后的
   干净合成图，再复制一份用于叠加棋盘格预览。
-- 两个 Provider 都直接使用干净 Warp 合成图作为 `image`，使用原始 `inpaint_mask` 作为
+- 三个 Provider 都直接使用干净 Warp 合成图作为 `image`，使用原始 `inpaint_mask` 作为
   `mask_image`。
 
 ## 4. HTTP 接口
@@ -65,7 +66,7 @@ SD1.5 默认推理参数：
 `source_mask`，保证生成输入对应按钮点击时的编辑状态。
 
 接口返回生成 PNG Data URL、模型名、推理耗时，以及实际传给所选 Pipeline 的 PNG 调试图
-和各自尺寸。两个 Provider 均返回 `image` 与 `mask_image`。
+和各自尺寸。三个 Provider 均返回 `image` 与 `mask_image`。
 
 ### `GET /api/generation-progress`
 
@@ -102,7 +103,8 @@ Provider 使用的 PIL 对象编码，便于核对 Warp 图和白色重绘区域
 ## 6. 依赖与启动参数
 
 `requirements.txt` 使用 Diffusers GitHub 主分支，包含 `AutoPipelineForInpainting`、
-`Flux2KleinInpaintPipeline`、Transformers、Accelerate、Safetensors 和 SentencePiece。
+`Flux2KleinInpaintPipeline`、`ZImageInpaintPipeline`、Transformers、Accelerate、Safetensors
+和 SentencePiece。
 
 相关启动参数：
 
@@ -118,9 +120,14 @@ Provider 使用的 PIL 对象编码，便于核对 Warp 图和白色重绘区域
 --flux-device
 --flux-cache-dir
 --flux-cpu-offload
+--zimage-model
+--zimage-device
+--zimage-cache-dir
+--zimage-cpu-offload
 ```
 
-SD1.5 CUDA 使用 float16，FLUX CUDA 优先使用 bfloat16；显式选择 CPU 时使用 float32。
+SD1.5 CUDA 使用 float16，FLUX 与 Z-Image CUDA 优先使用 bfloat16；显式选择 CPU 时使用
+float32。Z-Image-Turbo 默认使用 8 steps、strength 1.0 和 guidance 0.0。
 
 ## 7. 验证
 
@@ -129,12 +136,12 @@ SD1.5 CUDA 使用 float16，FLUX CUDA 优先使用 bfloat16；显式选择 CPU �
 ```powershell
 $env:PYTHONPATH = ".;.\inpaint4drag"
 D:\anaconda3\envs\pytorch-cpu\python.exe -m unittest discover -s inpaint4drag\tests -v
-D:\anaconda3\envs\pytorch-cpu\python.exe -m py_compile inpaint4drag\demo.py inpaint4drag\baseline_warp.py inpaint4drag\my_warp.py inpaint4drag\sam_provider.py inpaint4drag\sd15_inpaint_provider.py inpaint4drag\flux_inpaint_provider.py
+D:\anaconda3\envs\pytorch-cpu\python.exe -m py_compile inpaint4drag\demo.py inpaint4drag\baseline_warp.py inpaint4drag\my_warp.py inpaint4drag\sam_provider.py inpaint4drag\sd15_inpaint_provider.py inpaint4drag\flux_inpaint_provider.py inpaint4drag\zimage_inpaint_provider.py
 node --check inpaint4drag\web\app.js
 git diff --check
 ```
 
-测试集包含既有 Warp 回归、生成请求重算、两个 Provider 的 Warp/Mask 输入语义、最终 Mask
+测试集包含既有 Warp 回归、生成请求重算、三个 Provider 的 Warp/Mask 输入语义、最终 Mask
 合并和 Pipeline step 进度状态测试。
 模型权重加载与 GPU 推理在安装 Diffusers 主分支和对应 Provider 权重的目标环境执行。
 
@@ -145,6 +152,10 @@ SD1.5 Provider 将输入宽高调整为最接近的 8 的倍数，并对 Mask �
 
 FLUX Provider 不设置 `padding_mask_crop`，以完整 Warp `image` 和原始 `mask_image` 坐标系
 执行 inpaint。
+
+Z-Image Provider 根据已加载 Pipeline 的 `2 * vae_scale_factor` 动态对齐输入宽高，并对
+Mask 使用最近邻缩放。生成结果恢复至 Demo 输入尺寸后，使用原始全分辨率 `inpaint_mask`
+合成。
 
 Klein Pipeline 会把超过约 100 万像素的输入先等比例缩小到约 1MP。Provider 在 Pipeline
 返回尺寸与 Demo 输入尺寸不一致时，将完整结果恢复到 Demo 输入尺寸。默认 1080 px 长边预览
